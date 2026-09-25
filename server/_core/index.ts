@@ -8,6 +8,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { archiveExpiredContractsHandler } from "../scheduled";
+import { registerInvoicePdfRoute } from "../invoicePdf";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -46,6 +47,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   app.get("/healthz", (_req, res) => res.json({ ok: true }));
   registerStorageProxy(app);
+  registerInvoicePdfRoute(app);
   app.post("/api/scheduled/archive-expired-contracts", archiveExpiredContractsHandler);
   // tRPC API
   app.use(

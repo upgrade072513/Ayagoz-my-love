@@ -19,6 +19,7 @@ import { assertPermission } from "@shared/accessControl";
 import { deriveBlockFolder } from "@shared/contractFolder";
 import { invokeLLM, listLLMModels } from "./_core/llm";
 import { getOcrProvider, OCR_FIELDS_PROMPT } from "./ocr";
+import { recognizeLocally } from "./localOcr";
 import { buildInvoiceEmail } from "./email";
 import { createHash } from "node:crypto";
 import { establishSession, generateTemporaryPassword, hashPassword, normalizeEmail, revokeCurrentSession, revokeAllUserSessions, assertLoginRateLimit, clearFailedLogins, recordFailedLogin, TEMPORARY_PASSWORD_TTL_MS, verifyPassword } from "./localAuth";
@@ -101,7 +102,20 @@ async function extractContractFromScan(input: { dataUrl: string; mimeType: "appl
       return buildOcrFallback(input.fileName, isOcrCapacityError(error) ? undefined : `Автораспознавание не сработало (${reason.slice(0, 160)}). Номер и дата взяты из имени файла.`);
     }
   }
-  if (!process.env.BUILT_IN_FORGE_API_URL || !process.env.BUILT_IN_FORGE_API_KEY) return buildOcrFallback(input.fileName, "Автораспознавание сканов не подключено: добавьте ANTHROPIC_API_KEY или GEMINI_API_KEY в настройках сервера.");
+  if (!process.env.BUILT_IN_FORGE_API_URL || !process.env.BUILT_IN_FORGE_API_KEY || process.env.OCR_ENGINE === "local") {
+    // Default: our own recognition (MuPDF + Tesseract + contract rules), no external service involved.
+    try {
+      const base64 = input.dataUrl.slice(input.dataUrl.indexOf(",") + 1);
+      const { rawText: _raw, usedOcr: _usedOcr, ...fields } = await recognizeLocally({ base64, mimeType: input.mimeType });
+      const identity = parseScanIdentity(input.fileName);
+      const merged = withScanDefaults({ ...fields, contractNumber: fields.contractNumber ?? identity.contractNumber, contractDate: fields.contractDate ?? identity.contractDate });
+      return scanResultValidator.parse(merged);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn("[OCR:local]", reason);
+      return buildOcrFallback(input.fileName, `Распознавание не удалось (${reason.slice(0, 120)}). Номер и дата взяты из имени файла.`);
+    }
+  }
   try {
     const models = await listLLMModels();
     const model = models.data.find(item => item.id === "gemini-3-flash-preview")?.id ?? models.data.find(item => item.id.includes("gemini"))?.id;
