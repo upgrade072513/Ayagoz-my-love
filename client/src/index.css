@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  color: #18202d;
+  background: #f7f8fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: #f7f8fa; }
+button, input, select, textarea { font: inherit; }
+h1, h2, h3 { font-family: 'Space Grotesk', 'DM Sans', sans-serif; }
+button { transition: transform 160ms var(--ease-out), background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease; }
+button:active { transform: scale(0.98); }
+::selection { background: #ead5a1; color: #18202d; }
+
+.dashboard-shell { background-image: radial-gradient(circle at 80% -10%, rgba(216, 180, 107, 0.1), transparent 26rem); }
+.dashboard-sidebar { box-shadow: 12px 0 30px rgba(24, 32, 45, 0.025); }
+.dashboard-header { box-shadow: 0 1px 12px rgba(24, 32, 45, 0.025); }
+.nav-item-active { background: #18202d; color: white; box-shadow: 0 8px 20px rgba(24, 32, 45, 0.13); }
+.hero-card { background: linear-gradient(125deg, #18202d 0%, #263449 58%, #34465d 100%); }
+.hero-glow { position: absolute; border-radius: 999px; pointer-events: none; filter: blur(1px); }
+.hero-glow-one { width: 22rem; height: 22rem; right: 10%; top: -15rem; background: rgba(216, 180, 107, 0.14); }
+.hero-glow-two { width: 16rem; height: 16rem; right: -4rem; bottom: -8rem; background: rgba(126, 164, 196, 0.12); }
+.dashboard-surface { border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.88); box-shadow: 0 10px 28px rgba(24, 32, 45, 0.035); }
+.metric-card { border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255,255,255,0.9); box-shadow: 0 8px 22px rgba(24, 32, 45, 0.03); transition: transform 180ms var(--ease-out), box-shadow 180ms ease, border-color 180ms ease; }
+.metric-card:hover { transform: translateY(-2px); border-color: rgba(216, 180, 107, 0.45); box-shadow: 0 14px 28px rgba(24, 32, 45, 0.07); }
+.metric-icon { display: flex; height: 2.25rem; width: 2.25rem; align-items: center; justify-content: center; border-radius: 0.75rem; }
+.metric-icon svg { height: 1.05rem; width: 1.05rem; }
+.metric-icon-blue { background: #edf5fb; color: #5d8db4; }
+.metric-icon-gold { background: #fbf5e8; color: #b38b3f; }
+.metric-icon-green { background: #edf8f2; color: #4b9a73; }
+.metric-icon-purple { background: #f4effb; color: #8a6bb2; }
+.metric-icon-slate { background: #f1f4f7; color: #748196; }
+.eyebrow { color: #b38b3f; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.16em; line-height: 1rem; text-transform: uppercase; }
+.login-shell { background: radial-gradient(circle at 50% 0%, rgba(216, 180, 107, 0.16), transparent 34rem), #f7f8fa; }
+.login-card { border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255,255,255,0.88); box-shadow: 0 24px 60px rgba(24, 32, 45, 0.09); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
+@media print { aside, header, button { display: none !important; } main { padding: 0 !important; } }
+
+/* Long tables keep their key column visible while horizontal scrolling. */
+.contracts-data-table th:nth-child(2), .contracts-data-table tbody td:nth-child(3), .accruals-data-table th:nth-child(2), .accruals-data-table tbody td:nth-child(2), .invoices-data-table th:first-child, .invoices-data-table tbody td:first-child { position: sticky; left: 48px; z-index: 5; box-shadow: 6px 0 10px -10px rgba(24, 32, 45, 0.55); }
+.contracts-data-table thead th:nth-child(2), .accruals-data-table thead th:nth-child(2), .invoices-data-table thead th:first-child { background: #f8fafc; }
+.contracts-data-table tbody td:nth-child(3), .accruals-data-table tbody td:nth-child(2), .invoices-data-table tbody td:first-child { background-color: inherit; }
+
+/* Compact registry tables: keep rows dense without sacrificing readability. */
+.contracts-data-table,
+.accruals-data-table { font-size: 0.8125rem; line-height: 1.3; }
+.contracts-data-table thead th,
+.accruals-data-table thead th { padding: 0.6rem 0.75rem; line-height: 1.2; }
+.contracts-data-table thead tr:last-child th,
+.accruals-data-table thead tr:last-child th { padding: 0.3rem 0.5rem; }
+.contracts-data-table tbody td,
+.accruals-data-table tbody td { padding: 0.6rem 0.75rem; vertical-align: middle; }
+.contracts-data-table tfoot td,
+.accruals-data-table tfoot td { padding: 0.6rem 0.75rem; }
+.contracts-data-table tbody td .text-xs,
+.accruals-data-table tbody td .text-xs { line-height: 1.2; }
+
+/* Keep table headers visible while browsing long registries. */
+.contracts-data-table thead th,
+.accruals-data-table thead th { position: sticky; top: 0; z-index: 10; background: #f8fafc; }
+.contracts-data-table thead tr:last-child th,
+.accruals-data-table thead tr:last-child th { top: 2.55rem; z-index: 9; background: rgba(255, 255, 255, 0.98); }
+.contracts-data-table thead th:nth-child(2),
+.accruals-data-table thead th:nth-child(2) { z-index: 12; }
+
+/* Let the browser calculate columns from their content while fitting the viewport. */
+.contracts-data-table,
+.accruals-data-table { width: 100%; min-width: 100% !important; table-layout: auto; }
+.contracts-data-table th,
+.contracts-data-table td,
+.accruals-data-table th,
+.accruals-data-table td { overflow-wrap: anywhere; }
+
+/* The app header is sticky too, so table headers must dock below it rather than hide underneath it. */
+.contracts-data-table thead th,
+.accruals-data-table thead th { position: sticky !important; top: 73px; z-index: 20; background: #f8fafc; }
+.contracts-data-table thead tr:last-child th,
+.accruals-data-table thead tr:last-child th { top: 116px; z-index: 19; background: rgba(255, 255, 255, 0.98); }
+.contracts-data-table thead th:nth-child(2),
+.accruals-data-table thead th:nth-child(2) { z-index: 22; }
+.contracts-data-table tbody td,
+.accruals-data-table tbody td { padding: 0.42rem 0.6rem; white-space: normal; word-break: break-word; }
+.contracts-data-table thead th,
+.accruals-data-table thead th { padding: 0.45rem 0.6rem; }
+
+@media (max-width: 1023px) {
+  .contracts-data-table thead th,
+  .accruals-data-table thead th { top: 56px; }
+  .contracts-data-table thead tr:last-child th,
+  .accruals-data-table thead tr:last-child th { top: 99px; }
+}
+
+/* Long registries scroll inside their own viewport, keeping headers truly visible. */
+.contracts-table-scroll,
+.accruals-table-scroll { max-height: calc(100vh - 300px); overflow: auto; overscroll-behavior: contain; }
+.contracts-data-table thead th,
+.accruals-data-table thead th { top: 0 !important; }
+.contracts-data-table thead tr:last-child th,
+.accruals-data-table thead tr:last-child th { top: 42px !important; }
+@media (max-width: 1023px) {
+  .contracts-table-scroll,
+  .accruals-table-scroll { max-height: calc(100vh - 250px); }
+}
+
+/* Keep the contracts registry readable; horizontal scrolling is preferable to squeezed columns. */
+.contracts-data-table { width: 100%; min-width: 1180px !important; table-layout: auto; }
+.contracts-data-table th,
+.contracts-data-table td { min-width: 92px; }
+.contracts-data-table th:first-child,
+.contracts-data-table td:first-child { min-width: 48px; width: 48px; }
+.contracts-data-table th:nth-child(2),
+.contracts-data-table td:nth-child(2) { min-width: 132px; }
+.contracts-data-table th:nth-child(4),
+.contracts-data-table td:nth-child(4),
+.contracts-data-table th:nth-child(5),
+.contracts-data-table td:nth-child(5) { min-width: 190px; }
+.contracts-data-table th:last-child,
+.contracts-data-table td:last-child { min-width: 110px; }
+
+.print-brand { display: none; }
+@media print { .print-brand { display: flex !important; } }
+
+/* Keep the first data row fully below the two-level sticky header. */
+.contracts-table-scroll,
+.accruals-table-scroll { scroll-padding-top: 56px; }
+.contracts-data-table thead th,
+.accruals-data-table thead th { z-index: 20; background: #f8fafc; box-shadow: 0 1px 0 rgba(148,163,184,.22); }
+.contracts-data-table thead tr:first-child th,
+.accruals-data-table thead tr:first-child th { top: 0 !important; min-height: 52px; height: 52px; vertical-align: middle; }
+.contracts-data-table thead tr:nth-child(2) th,
+.accruals-data-table thead tr:nth-child(2) th { top: 52px !important; height: 44px; background: #ffffff; }
+.contracts-data-table tbody tr:first-child td,
+.accruals-data-table tbody tr:first-child td { border-top: 8px solid #ffffff; }
