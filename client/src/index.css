@@ -29,6 +29,7 @@
   --app-warn: #9a5b00;
   --app-warn-soft: #fff4e0;
   --app-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --app-sidebar: #ffffff;
   --radius: 0.75rem;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Onest", system-ui, sans-serif;
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Onest", system-ui, sans-serif;
@@ -66,6 +67,7 @@
   --app-warn: #ffb340;
   --app-warn-soft: rgba(255, 159, 10, 0.16);
   --app-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --app-sidebar: #141416;
   color-scheme: dark;
 }
 
@@ -138,6 +140,18 @@ button:active { transform: scale(0.98); }
 .ios-action-circle { width: 3.75rem; height: 3.75rem; border-radius: 999px; background: var(--app-surface-2); color: var(--app-accent); display: flex; align-items: center; justify-content: center; }
 .ios-action:hover .ios-action-circle { background: var(--app-accent-soft); }
 .ios-action-circle svg { width: 1.5rem; height: 1.5rem; stroke-width: 1.9; }
+
+/* Side panel (iPadOS-style sidebar) */
+.app-sidebar { background: var(--app-sidebar); border-right: 1px solid var(--app-sep); }
+.sidebar-row { display: flex; align-items: center; gap: 0.75rem; height: 2.75rem; width: 100%; padding: 0 0.625rem; border: 0; border-radius: 0.625rem; background: transparent; color: var(--app-fg); font-size: 0.9375rem; font-weight: 500; cursor: pointer; }
+.sidebar-row:hover { background: var(--app-fill); }
+.sidebar-row[aria-current="page"] { background: var(--app-active-bg); color: var(--app-active-fg); font-weight: 600; }
+.sidebar-row[aria-current="page"] .ios-tile { background: rgba(255, 255, 255, 0.24) !important; color: var(--app-active-fg); }
+.sidebar-row-sub { color: var(--app-fg-2); }
+.sidebar-row[aria-current="page"] .sidebar-row-sub { color: inherit; opacity: 0.85; }
+.sidebar-caption { margin: 1.25rem 0.625rem 0.375rem; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--app-fg-3); }
+.sidebar-icon-button { width: 2.25rem; height: 2.25rem; flex-shrink: 0; border: 0; border-radius: 0.625rem; background: transparent; color: var(--app-fg-2); display: inline-flex; align-items: center; justify-content: center; }
+.sidebar-icon-button:hover { background: var(--app-fill); color: var(--app-fg); }
 
 /* legacy helpers, now theme-aware */
 .dashboard-shell { background: var(--app-bg); }
@@ -302,3 +316,14 @@ main table { border-radius: 0; }
 /* Secondary (outline) buttons look like iOS tinted buttons. */
 [data-slot="button"][data-variant="outline"], button[data-slot="button"].border { border-color: var(--app-sep-strong); background-color: var(--app-surface); }
 button[data-slot="button"].border:hover { background-color: var(--app-fill); }
+
+/* Tables: never break words or numbers in the middle; long tables scroll sideways instead. */
+.contracts-data-table th, .contracts-data-table td, .accruals-data-table th, .accruals-data-table td, .invoices-data-table th, .invoices-data-table td { overflow-wrap: normal !important; word-break: normal !important; }
+.contracts-data-table td, .accruals-data-table td, .invoices-data-table td { white-space: nowrap !important; }
+.contracts-data-table thead tr:last-child th, .accruals-data-table thead tr:last-child th, .invoices-data-table thead tr:last-child th { white-space: nowrap; }
+.contracts-data-table, .accruals-data-table { min-width: max-content !important; }
+.invoices-data-table { min-width: max-content !important; }
+.invoices-data-table th:first-child, .invoices-data-table tbody td:first-child { left: 0 !important; }
+.invoices-data-table thead th { background: var(--app-surface-2); }
+.contracts-data-table tbody td:nth-child(3), .accruals-data-table tbody td:nth-child(2), .invoices-data-table tbody td:first-child { background-color: var(--app-surface); }
+thead th { letter-spacing: 0.02em; }
