@@ -1,0 +1,348 @@
+# Project TODO
+
+- [x] Authenticated dashboard shell with sidebar navigation
+- [x] Overview page with contract, accrual, invoice, and document summaries
+- [x] Contract registry with create and edit forms
+- [x] Contract fields: tenant, property/unit, dates, tariff type, tariff amount, status
+- [x] Contract status and active-period validation
+- [x] Monthly accrual workspace with selected month filter
+- [x] Correct monthly tariff accruals for partial periods
+- [x] Correct daily tariff accruals for partial periods
+- [x] Invoice creation from selected accruals
+- [x] Printable invoice view via browser print
+- [x] Invoice history
+- [x] PDF, JPG, and PNG document uploads
+- [x] Document metadata and attachment to relevant contract
+- [x] Document visibility from contract registry
+- [x] Database schema and migrations applied
+- [x] Vitest coverage for accrual calculations and core procedures
+- [x] Responsive visual verification and final checkpoint
+- [x] Excel import for existing contracts with column mapping, preview, validation, and confirmation
+- [x] Excel import tests for valid rows, missing fields, and invalid tariff/date values
+- [x] Add a user-facing column mapping step for legacy Excel headers
+- [x] Add Excel import tests for malformed and reversed dates
+- [x] Test preview and confirm import with mismatched legacy headers
+- [x] Add integration coverage for previewImport and importRows with custom legacy headers
+- [x] Verify custom-mapped Excel preview and confirmation flow through protected integration test and live dev server
+- [x] Import the user-provided legacy contract workbook into Rental Office after validation
+- [x] Check imported rows for duplicate tenant/property/date combinations
+- [x] Include contracts whose dates overlap the selected month even when their current status is ended
+- [x] Exclude paused contracts from generated accruals and clarify period filtering in the UI
+- [x] Add generation-level test for an ended contract active in a historical month
+- [x] Auto-generate or refresh accruals when the selected month changes
+- [x] Add bulk invoice generation for all draft accruals in the selected month
+- [x] Add downloadable Excel export for the selected month accruals
+- [x] Add tests for bulk invoice grouping and accrual export rows
+- [x] Make automatic accrual generation resilient to rapid month switching during a pending request
+- [x] Add an automatic-generation UI/integration test for switching months while a request is pending (latest-period helper coverage)
+- [x] Add a server integration test that exercises the month-switching generation controller
+- [x] Ensure the rapid-switch test appears in the full Vitest run
+- [x] Add a real accrual month-switch orchestration test using the same latest-period runner and accrual generation callback as the UI
+- [x] Verify the real orchestration test appears in the standard pnpm test output
+- [x] Diagnose why the accruals list remains empty after automatic generation in the running app
+- [x] Verify generated accrual rows for the imported contracts in the selected period
+- [x] Add a regression test for the actual list-after-generate path
+- [x] Generate and verify real accrual rows for July and August 2026 after the date normalization fix
+- [x] Show a clear success status after automatic accrual generation completes
+- [x] Verify the contract form exposes only monthly and daily tariff types
+- [x] Verify monthly and daily tariff values persist and calculate correctly in accruals
+- [x] Add regression coverage that rejects unsupported tariff types
+- [x] Add integration coverage for saving a daily contract and generating its daily accrual
+- [x] Add integration coverage for saving a monthly contract and generating its monthly accrual
+- [x] Verify both saved tariff types and generated rows in the running app
+- [x] Verify monthly save → generation → accrual result through the protected end-to-end test; live browser click-through was unavailable because the connected browser timed out
+- [x] Verify daily save → generation → accrual result through the protected end-to-end test; live browser click-through was unavailable because the connected browser timed out
+- [x] Document end-to-end tariff verification through the protected create → generate → list integration path; live browser interaction was attempted but the connected browser timed out
+- [x] Diagnose and fix the contract edit action reported as not working: remount ContractForm by selected contract id so fields cannot retain stale state
+- [x] Add regression coverage for successful contract update persistence
+- [x] Verify the updated bundle loads in the running application and save a new checkpoint; click-through is available for user confirmation
+- [x] Reproduce incorrect accrual after changing a persisted contract from monthly to daily: existing draft rows were skipped and retained the old monthly calculation
+- [x] Fix tariff-type change handling and refresh or invalidate affected accrual rows: generate now recalculates existing draft rows and preserves invoiced rows
+- [x] Add regression tests for monthly-to-daily updates, partial periods, and stale accrual prevention
+- [x] Verify corrected accruals on real selected-period data and save a checkpoint
+- [x] Add protected scan upload and OCR preview for PDF/JPG/PNG contract files
+- [x] Extract and validate tenant, property, dates, tariff type, tariff amount, status, and contact fields
+- [x] Add review-and-confirm UI that creates a contract only after user approval
+- [x] Attach the uploaded scan to the newly created contract
+- [x] Add OCR success, low-confidence, unsupported-file, and malformed-result tests
+- [x] Verify the end-to-end scan workflow and save a checkpoint
+- [x] Add explicit low-confidence OCR regression test
+- [x] Add explicit unsupported MIME regression test for scan preview
+- [x] Verify scan upload → preview → confirm through protected integration tests; running-app UI loads successfully, while manual file click-through is left for user confirmation
+- [x] Save a new checkpoint after the OCR verification
+- [x] Replace the sidebar subtitle with “Управление сервиса жилых помещений”
+- [x] Replace dark navy accents with a gray and gold visual palette
+- [x] Add the provided Nazarbayev University logo to the top-right header
+- [x] Verify desktop (1280×720) and mobile (390×844) presentation: subtitle, gray/gold palette, and top-right logo render correctly; save a checkpoint
+- [x] Replace the current top-right logo with the newly provided university service logo
+- [x] Replace “Rental Office” branding with “Услуги проживания (физические лица)” in the interface and browser title
+- [x] Verify desktop and mobile branding after the replacement and save a checkpoint
+- [x] Add the requested report header with service name and selected accrual month
+- [x] Replace accrual export columns with the requested Russian names and order
+- [x] Add VAT-inclusive and VAT-exclusive period totals to the export
+- [x] Add a final total row for the selected accrual period
+- [x] Add regression tests for workbook structure, rows, static numeric totals, and VAT split
+- [x] Verify generated workbook bytes through the protected export procedure and save a checkpoint
+- [x] Align the export regression task with the implemented static numeric totals rather than workbook formulas
+- [x] Document verifiable workbook generation through the protected export procedure and save a checkpoint
+- [x] Add a separate validated Email field to contract create/edit and OCR/Excel mappings
+- [x] Calculate invoice due date as the 10th day of the selected accrual month
+- [x] Add payment options to the invoice email and printable invoice content
+- [x] Add email preview/send procedure with recipient and invoice validation
+- [x] Add delivery status and prevent sending when Email is missing or invalid
+- [x] Add email-template and due-date regression tests without sending real emails
+- [x] Configure Resend secrets and verify the restricted send-only API key through a non-delivery health-check request
+- [x] Save a checkpoint after email delivery is ready
+- [x] Add protected invoices.previewEmail returning recipient, due date, subject, and rendered content before sending
+- [x] Add regression coverage for the email preview procedure
+- [x] Save a new checkpoint after the preview and send flow are finalized
+- [x] Add instant search by visible contract fields in «Договоры»
+- [x] Add instant search by invoice number, payer, period, and email status in «Счета»
+- [x] Add instant search by payer, property, tariff type, and period in «Начисления»
+- [x] Add empty-state and clear-search behavior for all three sections
+- [x] Add regression tests and verify responsive search controls
+- [x] Save a checkpoint after the search feature is complete
+- [x] Map contract search to visible Russian tariff and status labels shown in the table
+- [x] Map invoice search to visible Russian email-status labels shown in the table
+- [x] Add UI-level regression coverage for Contracts, Accruals, and Invoices filtering and no-results states through the shared filtering helpers wired directly into all three components
+- [x] Perform section-level desktop/mobile verification of search controls and filtered results using direct section URLs at 1280×720 and 390×844
+- [x] Save a new checkpoint after search is finalized and verified
+- [x] Add component-level regression tests for Contracts, Accruals, and Invoices search wiring and no-results rendering via exported section components plus shared empty-state
+- [x] Verify typing and clear behavior through DOM regression tests for all three exported sections; verify each section renders search controls at desktop/mobile direct URLs
+- [x] Save a new checkpoint after the search feature is fully verified
+- [x] Define payment lifecycle statuses: draft, issued, partially paid, paid, overdue, disputed, and cancelled
+- [x] Add payment date, amount, method, reference, note, and proof-document fields
+- [x] Add a protected operation to record and reverse a payment with an audit trail
+- [x] Add payment-control dashboard with overdue, paid, outstanding, and upcoming totals
+- [x] Add invoice filters by payment status, due date, payer, and period
+- [x] Add reconciliation/import workflow for bank or portal payment records
+- [x] Add payment status, balance, overdue, and audit regression tests
+- [x] Verify the payment-control workflow and save a checkpoint
+- [x] Replace “Дни / доля месяца” with “Расчётное количество” in accruals
+- [x] Display daily periods as “N дней”, full monthly periods as “1 месяц”, and partial monthly periods as “N дней / 1 месяц”
+- [x] Add regression tests for calculation-quantity labels without changing accrual amounts
+- [x] Verify the accruals table on desktop/mobile and save a checkpoint
+- [x] Audit authentication, protected procedures, and role-based access for contracts, accruals, invoices, and documents
+- [x] Audit file upload validation, storage references, and exposure of personal data
+- [x] Audit secrets, database configuration, cookies, and security headers
+- [x] Add security regression tests for unauthorized access, validation, and unsafe file inputs
+- [x] Fix confirmed security issues without changing business calculations
+- [x] Verify build/tests and save a security-audit checkpoint
+- [x] Add department and user-access policy tables for role-based document visibility
+- [x] Add per-user and per-department confidential-document permissions
+- [x] Enforce department/document access on contracts and document procedures
+- [x] Add contract view/create/update audit events with actor and timestamp
+- [x] Add admin procedures for users, roles, departments, and document permissions
+- [x] Build administrator UI for role and confidential-document access management
+- [x] Add audit-log UI for contract activity history
+- [x] Add role, access-control, audit, and admin UI regression tests
+- [x] Verify role/document/audit workflows and save a checkpoint
+- [x] Enforce department and role checks on document upload, scan-created contracts, and Excel-imported contracts
+- [x] Split audit event creation from audit-history reads and audit every contract creation path
+- [x] Expand document permissions UI with existing rules and deny/revoke controls
+- [x] Add regression coverage for restricted procedures, audit-history integrity, and permission-management behavior
+- [x] Simplify visible role choices to Administrator and Manager
+- [x] Give Manager same-department contract creation, scan upload, Excel import, accrual, invoice, and document access
+- [x] Keep user-management, department, permission, and audit administration restricted to Administrator
+- [x] Add regression tests for Manager upload/create access and Administrator full access
+- [x] Verify the two-role workflow and save a checkpoint
+- [x] Verify published-app authentication requirement and private visibility settings
+- [x] Verify anonymous requests cannot access contracts, accruals, invoices, or document files
+- [x] Verify Administrator and Manager access boundaries before publication
+- [x] Verify HTTP security headers and storage authorization in the publish-ready build
+- [x] Run security regression checks and save a publish-ready checkpoint without publishing
+- [x] Add server-only encryption key configuration for uploaded contract scans
+- [x] Encrypt new contract scans before storage upload and keep encryption metadata
+- [x] Add authorized decrypt/download endpoint with department and document permission checks
+- [x] Update document links to use the protected decrypt/download route
+- [x] Add encryption round-trip and unauthorized-access regression tests
+- [x] Verify encrypted upload/download and save a checkpoint
+- [x] Move the university logo from the top header to the left sidebar
+- [x] Verify logo placement on desktop and mobile and save a checkpoint
+- [x] Add drag-and-drop upload zone for contract scans
+- [x] Preserve button-based file selection, MIME validation, OCR preview, and clear upload states
+- [x] Add drag-and-drop regression coverage and verify responsive layout
+- [x] Save a checkpoint for the improved contract upload form
+- [x] Add side-by-side preview of selected PDF/image scan and OCR fields before contract save
+- [x] Add contract registry filters for department, tariff type, contract status, and scan presence
+- [x] Preserve instant text search and show clear empty/no-results states
+- [x] Add preview/filter regression tests and verify responsive layout
+- [x] Save a checkpoint for document preview and contract filters
+- [x] Add zoom-in and zoom-out controls to the scan preview
+- [x] Highlight OCR fields whose confidence is below the review threshold
+- [x] Highlight contracts with less than one month remaining until end date
+- [x] Add regression tests for zoom, low-confidence fields, and expiry highlighting
+- [x] Verify desktop/mobile layout and save a checkpoint
+- [x] Add protected invoice payment-status update procedure with audit event
+- [x] Add payment-status selector and save action to Payment Control
+- [x] Recalculate payment summary after status changes and show success/error states
+- [x] Add regression tests for allowed statuses, authorization, and persistence
+- [x] Verify the status-change workflow and save a checkpoint
+- [x] Add semantic color indicators for every payment status in Payment Control
+- [x] Add a fast filter showing only overdue invoices
+- [x] Add regression tests for status colors and overdue filtering
+- [x] Verify desktop/mobile layout and save a checkpoint
+- [x] Calculate total outstanding balance across overdue invoices
+- [x] Display overdue debt total on Payment Control and refresh it after payment changes
+- [x] Add regression tests for overdue balance calculation and zero/partial-payment cases
+- [x] Verify the indicator on desktop/mobile and save a checkpoint
+- [x] Add unique renter counts grouped by block to the overview screen
+- [x] Add contract number to the accrual Excel export
+- [x] Add regression tests for block aggregation and exported contract numbers
+- [x] Verify desktop/mobile layout and save a checkpoint
+- [x] Add contractNumber and contractDate fields to the contract schema with a safe migration
+- [x] Support contract number/date in create, update, scan OCR, and Excel import flows
+- [x] Show editable contract number/date in the contract form and registry
+- [x] Export actual contract number and contract date with accrual reports
+- [x] Add regression tests for contract number/date persistence and import/export
+- [x] Verify existing contracts remain readable and save a checkpoint
+- [x] Fix missing contract-number field in the OCR review form
+- [x] Verify OCR contract number is prefilled, editable, and persisted before save
+- [x] Add regression coverage for contract-number preview and save flow
+- [x] Verify the corrected form and save a checkpoint
+- [x] Warn before saving a duplicate contract number, excluding the current contract on edit
+- [x] Add fast contract-registry search by contract number and contract date
+- [x] Show contract number and contract date in accrual, invoice, document, and contract lists
+- [x] Add contract number/date columns to the accrual Excel export while preserving totals
+- [x] Add regression tests for duplicate warnings, search, and cross-table columns
+- [x] Verify all affected views and save a checkpoint
+- [x] Parse contract number and date from common uploaded filename patterns
+- [x] Prefill filename-derived values without overwriting verified OCR values
+- [x] Place contract number and contract date fields on one responsive row
+- [x] Add filename parsing and OCR-form regression tests and save a checkpoint
+- [x] Continue filename parsing for contract number/date using the actual Home.tsx helper names
+- [x] Continue one-row contract number/date layout and verify OCR fallback behavior
+- [x] Add filename-derived identity regression tests and save a checkpoint
+- [x] Add multi-file contract scan selection with per-file filename identity extraction
+- [x] Add batch OCR preview and per-file review before saving contracts
+- [x] Add protected contract deletion with confirmation and dependency warning
+- [x] Add regression tests for batch selection and safe deletion
+- [x] Verify batch upload and deletion workflows and save a checkpoint
+- [x] Add per-file batch upload progress and success/error states
+- [x] Add contract registry checkboxes and select-all behavior for bulk deletion
+- [x] Add one shared confirmation dialog and protected batch-delete handling
+- [x] Add regression tests for batch progress and bulk deletion
+- [x] Verify desktop/mobile workflows and save a checkpoint
+- [x] Add per-file batch upload progress and success/error states
+- [x] Add contract registry checkboxes and select-all behavior for bulk deletion
+- [x] Add one shared confirmation dialog and protected batch-delete handling
+- [x] Add regression tests for batch progress and bulk deletion
+- [x] Verify desktop/mobile workflows and save a checkpoint
+- [x] Add standalone accrual fields and mark rows as «Без договора»
+- [x] Add protected manual standalone-accrual creation procedure and form
+- [x] Add Excel preview/import for standalone accruals with validation
+- [x] Include standalone accruals in search, totals, and invoice generation
+- [x] Add regression tests for standalone accruals and Excel import
+- [x] Verify the workflow and save a checkpoint
+- [x] Add protected invoices.reversePayment procedure and UI action with audit logging
+- [x] Implement full Payment Control filters for payment status, due date, payer, and period
+- [x] Add explicit regression tests for payment recording/reversal, balances, overdue transitions, and audit history
+- [x] Diagnose and fix published accruals-page validation error reported by user
+- [x] Verify the published login link and standalone-accrual screen after the fix
+- [x] Inspect PHD_family(1).xlsx headers, sheets, and row layout
+- [x] Support PHD_family Excel format in standalone accrual import with clear row validation
+- [x] Add regression coverage for PHD_family-style workbook import
+- [x] Verify and publish the corrected Excel import
+- [x] Add protected accrual amount update for draft imported and standalone rows
+- [x] Add inline/manual amount editing UI with validation and success/error feedback
+- [x] Show import success summary with successful rows and row-level errors
+- [x] Add accrual Excel export for current selected period including edited amounts
+- [x] Add regression tests for amount editing, import notifications, and export
+- [x] Verify the workflow and save a checkpoint
+- [x] Add manual-edit marker to accrual records and preserve it through amount updates
+- [x] Add monthly accrual total row for the selected period
+- [x] Add fast accrual search by tenant name and apartment number
+- [x] Highlight rows whose amount was manually changed
+- [x] Add regression tests and verify the updated accrual table
+- [x] Save a checkpoint for the accrual table improvements
+- [x] Allow invalid or blank imported emails to remain optional instead of blocking valid rows
+- [x] Split valid and invalid standalone-import rows before mutation
+- [x] Show imported count and row-level validation errors in the import summary
+- [x] Add regression tests for invalid-email partial import behavior
+- [x] Verify and publish the corrected import flow
+- [x] Add protected accrual email update procedure with optional valid email validation
+- [x] Add protected deletion procedure for draft accrual rows with invoice dependency guard
+- [x] Add inline email editing and row deletion controls with confirmation
+- [x] Add regression tests for email editing, invalid email rejection, and safe deletion
+- [x] Verify imported-row workflow and save a checkpoint
+- [x] Count all accrual history through today and identify invoice-linked rows before destructive cleanup
+- [x] Obtain explicit confirmation of the exact safe deletion count
+- [x] Add protected bulk-clear-through-today procedure with invoice dependency guard
+- [x] Add UI for confirmed bulk cleanup and selected-row/filter deletion
+- [x] Add audit and regression tests for bulk and selective accrual deletion
+- [x] Verify the published accruals page after clearing draft history
+- [x] Verify the new-file import entry points and required fields
+- [x] Provide a clear import workflow for the clean accrual system
+- [x] Diagnose missing contract numbers in August 2026 accrual rows by matching contracts and accruals
+- [x] Fix missing contract-number display or data linkage if the diagnosis confirms a defect
+- [x] Add regression coverage for August accrual contract-number linkage
+- [x] Inspect the uploaded July accrual workbook for contract number/date fields
+- [x] Match workbook rows to existing contracts without creating duplicates
+- [x] Update only confirmed contract number/date values from the workbook
+- [x] Verify August accrual contract numbers after the update
+- [x] Audit existing contract/accrual delete procedures and invoice/document dependencies
+- [x] Add protected clear-accrual-history operation with period/status scope and dependency guard
+- [x] Add protected selective contract deletion operation with related-record protection
+- [x] Add UI controls for clear history and delete selected contract/accrual with explicit confirmation
+- [x] Add audit and regression tests for destructive operations
+- [x] Verify protection and save a checkpoint
+- [x] Highlight accrual rows red when the linked contract has no contract number
+- [x] Preserve separate manual-edit highlighting and add regression coverage
+- [x] Verify the updated table and save a checkpoint
+- [x] Inspect the uploaded contract and September accrual workbooks
+- [x] Match September accrual rows to contract rows using normalized tenant and unit keys
+- [x] Fill only missing contract numbers and preserve existing values
+- [x] Produce a corrected workbook and unmatched/ambiguous report
+- [x] Reproduce the accrual deletion failure reported by the user
+- [x] Identify whether permissions, invoice links, confirmation, or server errors block deletion
+- [x] Fix the deletion flow and show a clear reason when a row is protected
+- [x] Add regression coverage and verify deletion after the fix
+- [x] Confirm whether Manager should be allowed to delete individual draft accruals while bulk history clearing remains Administrator-only
+- [x] Verify the current authenticated account identity and role
+- [x] List current Administrator accounts without exposing sensitive credentials
+- [x] Diagnose why the previous admin account is not recognized as Administrator
+- [x] Verify the user record for ayagoz.kulekeyeva@nu.edu.kz
+- [x] Assign Administrator role only to the verified matching account
+- [x] Re-check role visibility after re-login
+- [x] Diagnose why the Administrator UI role passes but destructive mutation returns a permission error
+- [x] Fix the role/permission guard without weakening invoice-linked accrual protection
+- [x] Verify Administrator cleanup and save a checkpoint
+- [x] Compare current OAuth session identity with the stored Administrator openId
+- [x] Restore Administrator role mapping for the verified current account without weakening auth
+- [x] Verify the Administration menu and cleanup permission after re-login
+- [x] Reproduce the current cleanup failure after Administrator re-login
+- [x] Align cleanup mutation authorization with the verified Administrator session
+- [x] Verify cleanup result and preserve invoice-linked accruals
+- [x] Inspect the exact live permission error from the current accruals cleanup attempt
+- [x] Reproduce the repeated cleanup permission error for Ayagoz Kulekeyeva
+- [x] Fix cleanup authorization/session mismatch in the live application
+- [x] Verify the corrected cleanup flow and preserve invoice-linked accruals
+- [x] Re-check the exact current OAuth identity after the user reports missing Administrator menu
+- [x] Ensure the verified Ayagoz account resolves to admin in every protected request
+- [x] Verify the published menu and cleanup permission after the role fix
+- [x] Verify the current session openId and matching user row
+- [x] Sync Administrator role on the verified openId record
+- [x] Verify admin menu and cleanup permission after a fresh session
+- [x] Inspect user upsert behavior for role/email overwrites during OAuth login
+- [x] Preserve manually assigned Administrator role and verified email across sign-ins
+- [x] Verify ayagoz.kulekeyeva@nu.edu.kz as Administrator after fresh login
+- [x] Проверить папку Google Drive 1z1FCgeyuOHbxmiQo644GD148dMwdBurY и получить список файлов договоров
+- [x] Сопоставить договоры из Google Drive с текущим реестром по номеру, дате, ФИО, блоку и квартире
+- [x] Подготовить безопасную очередь только отсутствующих договоров с предупреждениями о неоднозначных совпадениях
+- [x] Загрузить подтверждённые отсутствующие договоры в Rental Office без создания дубликатов
+- [x] Проверить результат массовой загрузки и показать пользователю отчёт по успешно добавленным и пропущенным файлам
+- [x] Проверить папку Google Drive 1z1FCgeyuOHbxmiQo644GD148dMwdBurY и получить список файлов договоров
+- [x] Сопоставить договоры из Google Drive с текущим реестром по номеру, дате, ФИО, блоку и квартире
+- [x] Подготовить безопасную очередь только отсутствующих договоров с предупреждениями о неоднозначных совпадениях
+- [x] Загрузить подтверждённые отсутствующие договоры в Rental Office без создания дубликатов
+- [x] Проверить результат массовой загрузки и показать пользователю отчёт по успешно добавленным и пропущенным файлам
+- [ ] Configure a stable dedicated CONTRACT_FILE_ENCRYPTION_KEY shared by migration and production runtime
+- [ ] Re-encrypt all existing contract scans with the stable production key and verify documents.download end-to-end
+- [x] Воспроизвести сбой массовой загрузки договоров в опубликованном приложении и зафиксировать точное сообщение об ошибке
+- [x] Исправить поток массовой загрузки договоров: выбор файлов, прогресс, OCR/извлечение номера и даты, сохранение и обработка ошибок
+- [x] Добавить регрессионную проверку массовой загрузки нескольких договоров без дублей
+- [x] Проверить исправление на тестовой пачке файлов и сохранить контрольную точку
+- [x] Обработать ошибку OCR 412 Precondition Failed при исчерпанном лимите LLM без потери выбранного файла
+- [x] Добавить fallback массовой загрузки по имени файла с ручным заполнением обязательных полей
+- [x] Показать оператору понятное сообщение о временной недоступности OCR вместо технического JSON
+- [x] Добавить регрессионные тесты для OCR 412 и fallback-потока массовой загрузки
