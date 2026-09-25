@@ -1,0 +1,1 @@
+ALTER TABLE `contracts` ADD `blockFolder` varchar(120);

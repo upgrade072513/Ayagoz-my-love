@@ -1,0 +1,1 @@
+ALTER TABLE `accruals` ADD `amountEdited` boolean DEFAULT false NOT NULL;
