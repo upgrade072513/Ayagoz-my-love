@@ -227,7 +227,7 @@ button:active { transform: scale(0.98); }
 
 /* Long registries scroll inside their own viewport, keeping headers truly visible. */
 .contracts-table-scroll,
-.accruals-table-scroll { max-height: calc(100vh - 300px); overflow: auto; overscroll-behavior: contain; }
+.accruals-table-scroll { max-height: calc(100vh - 300px); overflow: auto; overscroll-behavior-x: contain; overscroll-behavior-y: auto; }
 .contracts-data-table thead th,
 .accruals-data-table thead th { top: 0 !important; }
 .contracts-data-table thead tr:last-child th,
@@ -407,7 +407,7 @@ main * { scroll-margin-top: 5.5rem; }
 
 /* Whole row is clickable when it has a selection checkbox; selected rows are clearly tinted. */
 tbody tr:has(> td:first-child input[type="checkbox"]) { cursor: pointer; }
-tbody tr:has(> td:first-child input[type="checkbox"]):hover > td { background-color: color-mix(in srgb, var(--app-accent) 6%, var(--row-bg)); }
+.contracts-data-table tbody tr:hover > td, .accruals-data-table tbody tr:hover > td, .invoices-data-table tbody tr:hover > td { background-color: color-mix(in srgb, var(--app-accent) 6%, var(--row-bg)); }
 tbody tr:has(> td:first-child input[type="checkbox"]:checked) { --row-bg: color-mix(in srgb, var(--app-accent) 14%, var(--app-surface)); }
 tbody tr:has(> td:first-child input[type="checkbox"]:checked) > td { background-color: var(--row-bg); }
 tbody tr:has(> td:first-child input[type="checkbox"]:checked) > td:first-child { box-shadow: inset 3px 0 0 var(--app-accent); }
