@@ -273,14 +273,7 @@ export default function Home() {
   const [section, setSection] = useState<Section>(() => { const requested = new URLSearchParams(window.location.search).get("section") as Section | null; return requested && ["overview", "contracts", "accruals", "invoices", "documents", "admin", "payments", "account"].includes(requested) ? requested : "overview"; });
   const [mobileOpen, setMobileOpen] = useState(false); const [overviewFilters, setOverviewFilters] = useState({ block: "all", status: "all", tariff: "all" }); const [openContractId, setOpenContractId] = useState<number | null>(null); const [quickSearch, setQuickSearch] = useState(""); const quickContracts = trpc.contracts.list.useQuery(undefined, { retry: false, enabled: isAuthenticated && !user?.mustChangePassword }); const quickSuggestions = useMemo(() => buildQuickSearchSuggestions(quickContracts.data ?? [], quickSearch), [quickContracts.data, quickSearch]); const handleQuickSearchChange = (value: string) => setQuickSearch(value); const submitQuickSearch = () => { if (!quickSearch.trim()) return; setSection("contracts"); setMobileOpen(false); };
   useEffect(() => { if (user && user.role !== "admin" && section === "admin") setSection("overview"); }, [user, section]);
-  // Frozen table columns turn into frosted glass while a table is scrolled sideways (see .is-scrolled-x in index.css).
   useEffect(() => {
-    const onScroll = (event: Event) => {
-      const el = event.target as HTMLElement | null;
-      if (!el?.classList || !(el.classList.contains("contracts-table-scroll") || el.classList.contains("accruals-table-scroll") || el.classList.contains("invoices-table-scroll"))) return;
-      el.classList.toggle("is-scrolled-x", el.scrollLeft > 6);
-    };
-    document.addEventListener("scroll", onScroll, true);
     // Clicking anywhere on a table row toggles its checkbox (no need to aim at the small box).
     const onRowClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
@@ -293,7 +286,7 @@ export default function Home() {
       checkbox.click();
     };
     document.addEventListener("click", onRowClick);
-    return () => { document.removeEventListener("scroll", onScroll, true); document.removeEventListener("click", onRowClick); };
+    return () => { document.removeEventListener("click", onRowClick); };
   }, []);
   if (loading) return <div className="flex min-h-screen items-center justify-center text-slate-500"><div className="flex items-center gap-3 text-sm"><span className="h-2 w-2 animate-pulse rounded-full bg-[#b38b3f]" />Загрузка панели…</div></div>;
   if (!isAuthenticated) return <LocalLogin />;
