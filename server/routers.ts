@@ -18,6 +18,7 @@ import { canAccessContractBlock, canViewDocument } from "@shared/access";
 import { assertPermission } from "@shared/accessControl";
 import { deriveBlockFolder } from "@shared/contractFolder";
 import { invokeLLM, listLLMModels } from "./_core/llm";
+import { getOcrProvider, OCR_FIELDS_PROMPT } from "./ocr";
 import { buildInvoiceEmail } from "./email";
 import { createHash } from "node:crypto";
 import { establishSession, generateTemporaryPassword, hashPassword, normalizeEmail, revokeCurrentSession, revokeAllUserSessions, assertLoginRateLimit, clearFailedLogins, recordFailedLogin, TEMPORARY_PASSWORD_TTL_MS, verifyPassword } from "./localAuth";
@@ -69,9 +70,38 @@ const isOcrCapacityError = (error: unknown) => { const message = error instanceo
 const parseScanIdentity = (fileName?: string) => { const baseName = String(fileName ?? "").replace(/\.[^.]+$/, "").trim(); const withDate = baseName.match(/^(.*?)\s+(?:от|from)\s+(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/i); if (withDate) { const year = withDate[4].length === 2 ? `20${withDate[4]}` : withDate[4]; return { contractNumber: withDate[1].replace(/^№\s*/i, "").trim() || null, contractDate: `${year}-${withDate[3].padStart(2, "0")}-${withDate[2].padStart(2, "0")}` }; } const withIsoDate = baseName.match(/^(.*?)\s+(?:от|from)\s+(\d{4})-(\d{1,2})-(\d{1,2})/i); if (withIsoDate) return { contractNumber: withIsoDate[1].replace(/^№\s*/i, "").trim() || null, contractDate: `${withIsoDate[2]}-${withIsoDate[3].padStart(2, "0")}-${withIsoDate[4].padStart(2, "0")}` }; const numberOnly = baseName.match(/^(?:№\s*)?([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./_-]*)/); return { contractNumber: numberOnly?.[1] ?? null, contractDate: null }; };
 const buildOcrFallback = (fileName?: string, reason?: string) => { const identity = parseScanIdentity(fileName); return { contractNumber: identity.contractNumber, contractDate: identity.contractDate, tenantName: null, tenantContact: null, tenantEmail: null, propertyName: null, unitName: null, startDate: null, endDate: null, tariffType: null, tariffAmount: null, status: null, confidence: 0, fieldConfidence: { contractNumber: identity.contractNumber ? 0.9 : 0, contractDate: identity.contractDate ? 0.9 : 0 }, warnings: [reason ?? "OCR временно недоступен: сервис распознавания вернул ошибку 412/лимит использования.", "Номер и дата взяты из имени файла; заполните остальные поля вручную и проверьте реквизиты перед сохранением."] }; };
 const parseOcrJson = (value: string) => { const cleaned = value.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim(); const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}"); const candidate = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned; try { return JSON.parse(candidate); } catch (error) { const message = error instanceof Error ? error.message : "неизвестная ошибка"; throw new Error(`OCR вернул повреждённый JSON (${message})`); } };
+const OCR_SYSTEM_PROMPT = "Ты аккуратно распознаёшь договор проживания (на русском, казахском или английском). Не угадывай данные: неизвестные поля возвращай null. Даты нормализуй в YYYY-MM-DD. Вид тарифа может быть только monthly или daily; месячный тариф означает ставку за месяц, суточный — ставку за сутки. Для каждого поля заполни fieldConfidence числом от 0 до 1: оценивай только качество распознавания этого поля, а для null ставь 0. Верни только JSON.";
+const SCAN_KEYS = ["contractNumber", "contractDate", "tenantName", "tenantContact", "tenantEmail", "propertyName", "unitName", "startDate", "endDate", "tariffType", "tariffAmount", "status"] as const;
+/** Models sometimes omit keys, send numbers as strings or unknown enum values — normalise before strict validation. */
+const withScanDefaults = (value: any) => {
+  const raw = value && typeof value === "object" ? value : {};
+  const out: any = { confidence: 0, fieldConfidence: {}, warnings: [], ...raw };
+  for (const key of SCAN_KEYS) if (out[key] === undefined || out[key] === "") out[key] = null;
+  if (typeof out.tariffAmount === "string") { const n = Number(out.tariffAmount.replace(/[^\d.,]/g, "").replace(",", ".")); out.tariffAmount = Number.isFinite(n) && n > 0 ? n : null; }
+  if (!["monthly", "daily"].includes(out.tariffType)) out.tariffType = null;
+  if (!["active", "paused", "ended"].includes(out.status)) out.status = null;
+  for (const key of SCAN_KEYS) if (key !== "tariffAmount" && out[key] !== null && typeof out[key] !== "string") out[key] = String(out[key]);
+  out.confidence = Math.min(1, Math.max(0, Number(out.confidence) || 0));
+  out.fieldConfidence = Object.fromEntries(Object.entries(out.fieldConfidence ?? {}).map(([k, v]) => [k, Math.min(1, Math.max(0, Number(v) || 0))]));
+  out.warnings = Array.isArray(out.warnings) ? out.warnings.map(String) : [];
+  return out;
+};
 async function extractContractFromScan(input: { dataUrl: string; mimeType: "application/pdf" | "image/jpeg" | "image/png"; fileName?: string }) {
   if (input.dataUrl.length > 20_000_000) throw new Error("Файл слишком большой для распознавания");
-  if (!process.env.BUILT_IN_FORGE_API_URL || !process.env.BUILT_IN_FORGE_API_KEY) return buildOcrFallback(input.fileName, "Автораспознавание сканов отключено: сервис распознавания не подключён.");
+  const provider = getOcrProvider();
+  if (provider) {
+    try {
+      const base64 = input.dataUrl.slice(input.dataUrl.indexOf(",") + 1);
+      const text = await provider.recognize({ base64, mimeType: input.mimeType, system: OCR_SYSTEM_PROMPT, prompt: OCR_FIELDS_PROMPT });
+      if (!text.trim()) throw new Error("Сервис распознавания вернул пустой ответ");
+      return scanResultValidator.parse(withScanDefaults(parseOcrJson(text)));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[OCR:${provider.name}]`, reason);
+      return buildOcrFallback(input.fileName, isOcrCapacityError(error) ? undefined : `Автораспознавание не сработало (${reason.slice(0, 160)}). Номер и дата взяты из имени файла.`);
+    }
+  }
+  if (!process.env.BUILT_IN_FORGE_API_URL || !process.env.BUILT_IN_FORGE_API_KEY) return buildOcrFallback(input.fileName, "Автораспознавание сканов не подключено: добавьте ANTHROPIC_API_KEY или GEMINI_API_KEY в настройках сервера.");
   try {
     const models = await listLLMModels();
     const model = models.data.find(item => item.id === "gemini-3-flash-preview")?.id ?? models.data.find(item => item.id.includes("gemini"))?.id;

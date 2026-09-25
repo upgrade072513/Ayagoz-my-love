@@ -29,7 +29,8 @@ const headerStyle = { fill: { fgColor: { rgb: REPORT_COLORS.navy } }, font: { bo
 const titleStyle = { fill: { fgColor: { rgb: REPORT_COLORS.navy } }, font: { bold: true, color: { rgb: REPORT_COLORS.gold }, sz: 14 }, alignment: { vertical: "center" } };
 const totalStyle = { fill: { fgColor: { rgb: REPORT_COLORS.paleGold } }, font: { bold: true, color: { rgb: REPORT_COLORS.navy } }, border: { top: { style: "medium", color: { rgb: REPORT_COLORS.gold } } } };
 const bodyBorderStyle = { border: { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder } };
-const currencyFormat = '#,##0.00 "₸"';
+// Excel "Денежный" format with Kazakhstani tenge (locale kk-KZ = 0x43F), so Excel shows the cell as currency ₸.
+const currencyFormat = '#,##0.00 [$₸-43F]';
 const dateFormat = "dd.mm.yyyy";
 function styleCell(sheet: any, row: number, col: number, style: any) { const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })]; if (cell) cell.s = { ...(cell.s ?? {}), ...style }; }
 function styleReportSheet(sheet: any, headers: string[], dataRows: number, currencyCols: number[] = [], dateCols: number[] = []) {
