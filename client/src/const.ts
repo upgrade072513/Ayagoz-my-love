@@ -1,4 +1,4 @@
-// Logo is still served from the old hosting's public CDN. To self-host it, put the file
-// into client/public/logo.png and change this to "/logo.png".
-export const APP_LOGO_URL =
-  "https://files.manuscdn.com/user_upload_by_module/web_dev_logo/310519663845440087/jUqWCihifDkyUmVI.png";
+// Brand assets are self-hosted in client/public.
+export const APP_LOGO_URL = "/logo.png";
+export const APP_LOGO_DARK_URL = "/logo-dark.png";
+export const APP_MARK_URL = "/mark.png";
