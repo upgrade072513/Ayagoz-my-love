@@ -6,7 +6,7 @@ import { APP_LOGO_DARK_URL, APP_LOGO_URL } from "@/const";
 import { useTheme } from "@/contexts/ThemeContext";
 
 const fieldClass =
-  "h-12 w-full border-0 bg-transparent px-4 text-[16px] outline-none placeholder:text-[var(--app-fg-3)]";
+  "h-12 w-full border-0 bg-transparent px-4 text-[1rem] outline-none placeholder:text-[var(--app-fg-3)]";
 
 export function LocalLogin() {
   const utils = trpc.useUtils();
@@ -44,10 +44,10 @@ export function LocalLogin() {
           alt="Nazarbayev University — University Service Management"
           className="mx-auto h-[76px] w-auto object-contain"
         />
-        <h1 className="ios-title mt-8 text-center text-[34px] leading-tight">
+        <h1 className="ios-title mt-8 text-center text-[2.125rem] leading-tight">
           Вход в систему
         </h1>
-        <p className="mt-2 text-center text-[15px]" style={{ color: "var(--app-fg-2)" }}>
+        <p className="mt-2 text-center text-[0.9375rem]" style={{ color: "var(--app-fg-2)" }}>
           Услуги проживания для физических лиц
         </p>
 
@@ -91,14 +91,14 @@ export function LocalLogin() {
           <Button
             type="submit"
             disabled={login.isPending}
-            className="h-12 w-full rounded-full text-[16px] font-semibold"
+            className="h-12 w-full rounded-full text-[1rem] font-semibold"
           >
             {login.isPending ? "Проверяем…" : "Войти"}
             <ChevronRight className="h-4 w-4" />
           </Button>
         </form>
 
-        <div className="mt-5 text-center text-[15px]">
+        <div className="mt-5 text-center text-[0.9375rem]">
           <button
             type="button"
             className="font-medium hover:underline"

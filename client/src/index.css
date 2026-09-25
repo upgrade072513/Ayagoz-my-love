@@ -30,6 +30,7 @@
   --app-warn-soft: #fff4e0;
   --app-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   --app-sidebar: #ffffff;
+  --app-blue-text: #0a63c9;
   --radius: 0.75rem;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Onest", system-ui, sans-serif;
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Onest", system-ui, sans-serif;
@@ -68,6 +69,7 @@
   --app-warn-soft: rgba(255, 159, 10, 0.16);
   --app-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
   --app-sidebar: #141416;
+  --app-blue-text: #64b5ff;
   color-scheme: dark;
 }
 
@@ -102,7 +104,8 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+/* Base size 14.5px (instead of 16px): the whole interface — text, buttons, spacing in rem — is ~10% more compact. */
+html { scroll-behavior: smooth; font-size: 14.5px; }
 body { margin: 0; min-width: 320px; background: var(--app-bg); color: var(--app-fg); transition: background-color 200ms ease, color 200ms ease; }
 button, input, select, textarea { font: inherit; }
 h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.015em; }
@@ -325,5 +328,58 @@ button[data-slot="button"].border:hover { background-color: var(--app-fill); }
 .invoices-data-table { min-width: max-content !important; }
 .invoices-data-table th:first-child, .invoices-data-table tbody td:first-child { left: 0 !important; }
 .invoices-data-table thead th { background: var(--app-surface-2); }
-.contracts-data-table tbody td:nth-child(3), .accruals-data-table tbody td:nth-child(2), .invoices-data-table tbody td:first-child { background-color: var(--app-surface); }
 thead th { letter-spacing: 0.02em; }
+
+/* Sticky key column takes the same colour as its row (highlighted rows included). */
+tbody tr { --row-bg: var(--app-surface); }
+tbody tr.bg-amber-50, tbody tr.bg-amber-50\/70 { --row-bg: #fff8e6; }
+tbody tr.bg-blue-50 { --row-bg: #eef5ff; }
+tbody tr.bg-red-50, tbody tr.bg-red-50\/60 { --row-bg: #fdf0ef; }
+.dark tbody tr.bg-amber-50, .dark tbody tr.bg-amber-50\/70 { --row-bg: color-mix(in srgb, #ff9f0a 14%, var(--app-surface)); }
+.dark tbody tr.bg-blue-50 { --row-bg: color-mix(in srgb, #0a84ff 14%, var(--app-surface)); }
+.dark tbody tr.bg-red-50, .dark tbody tr.bg-red-50\/60 { --row-bg: color-mix(in srgb, #ff453a 14%, var(--app-surface)); }
+tbody tr[class*="bg-"] > td { background-color: var(--row-bg); }
+.contracts-data-table tbody td:nth-child(3), .accruals-data-table tbody td:nth-child(2), .invoices-data-table tbody td:first-child { background-color: var(--row-bg) !important; }
+
+/* Buttons: one consistent gap between icon and text. */
+[data-slot="button"] > svg { margin: 0 !important; }
+
+/* Toolbars: one tidy row of filters. */
+.app-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: 1rem; background: var(--app-surface); box-shadow: var(--app-shadow); }
+.app-field-inline { display: inline-flex; align-items: center; gap: 0.5rem; height: 2.5rem; padding: 0 0.875rem; border-radius: 999px; background: var(--app-surface); box-shadow: inset 0 0 0 1px var(--app-sep-strong); color: var(--app-fg-2); }
+.app-field-inline input, .app-field-inline select { border: 0; background: transparent; outline: none; color: var(--app-fg); font-size: 0.875rem; font-weight: 500; }
+.app-field-inline select { padding-right: 0.25rem; cursor: pointer; }
+.app-field-inline:focus-within { box-shadow: inset 0 0 0 2px var(--app-accent); }
+
+/* ---------- Side panel: expanded (280px) ↔ icon rail (76px), animated ---------- */
+:root { --ease-spring: cubic-bezier(0.32, 0.72, 0, 1); }
+.app-sidebar { width: 264px; transition: width 420ms var(--ease-spring), transform 320ms var(--ease-spring), box-shadow 300ms ease; }
+.app-main { transition: padding-left 420ms var(--ease-spring); }
+.app-sidebar .sb-label { transition: opacity 220ms ease 120ms, transform 320ms var(--ease-spring) 80ms; white-space: nowrap; }
+.app-sidebar .sidebar-row { overflow: hidden; }
+.app-sidebar .ios-tile { transition: transform 360ms var(--ease-spring), background-color 200ms ease; }
+.sb-logo-mark { position: absolute; left: 0; top: 6px; opacity: 0; transform: scale(0.6) rotate(-12deg); transition: opacity 260ms ease, transform 420ms var(--ease-spring); }
+.sb-logo-full { transition: opacity 200ms ease 100ms, transform 380ms var(--ease-spring); transform-origin: left center; }
+.sb-rail-only { display: none; }
+.sidebar-caption { transition: opacity 200ms ease 120ms; white-space: nowrap; }
+@media (min-width: 1024px) {
+  .app-sidebar.is-rail { width: 72px; padding-left: 0.75rem; padding-right: 0.75rem; }
+  .app-sidebar.is-rail:hover { box-shadow: 8px 0 30px rgba(0, 0, 0, 0.06); }
+  .is-rail .sb-label { opacity: 0; transform: translateX(-10px); pointer-events: none; transition-delay: 0ms; }
+  .is-rail .sidebar-row { gap: 0; padding: 0 0.75rem; }
+  .is-rail .sb-profile { padding-left: 0.375rem; }
+  .is-rail .sb-search, .is-rail .sb-full-only { display: none; }
+  .is-rail .sb-rail-only { display: flex; }
+  .is-rail .sidebar-caption { opacity: 0; transition-delay: 0ms; }
+  .is-rail .sb-head { flex-direction: column; align-items: center; gap: 0.75rem; padding: 0; }
+  .is-rail .sb-logo { width: 34px; height: 54px; overflow: hidden; }
+  .is-rail .sb-logo-full { opacity: 0; transform: scale(0.7); transition-delay: 0ms; }
+  .is-rail .sb-logo-mark { opacity: 1; transform: scale(1) rotate(0deg); transition-delay: 120ms; }
+  /* staggered "wave" of icons when the rail opens or closes */
+  .app-sidebar nav .sidebar-row .ios-tile { transition-delay: calc(var(--i, 0) * 28ms); }
+  .is-rail nav .sidebar-row .ios-tile { transform: scale(1.08); }
+  .is-rail nav .sidebar-row:hover .ios-tile { transform: scale(1.18); }
+}
+@media (prefers-reduced-motion: reduce) { .app-sidebar, .app-main, .app-sidebar * { transition: none !important; } }
+.app-field-inline { flex: none; width: auto; }
+.app-field-inline select { width: auto; min-width: 0; appearance: auto; }

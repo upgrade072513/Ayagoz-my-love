@@ -90,7 +90,7 @@ function RolePill({ role }: { role: AppRole }) {
   return (
     <span
       className="whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold"
-      style={role === "admin" ? { background: "var(--app-accent-soft)", color: "var(--app-accent-text)" } : { background: "rgba(10,122,255,0.12)", color: "#0a63c9" }}
+      style={role === "admin" ? { background: "var(--app-accent-soft)", color: "var(--app-accent-text)" } : { background: "rgba(10,122,255,0.14)", color: "var(--app-blue-text)" }}
     >
       {ROLE_LABELS[role]}
     </span>
@@ -136,7 +136,7 @@ function BlockPicker({ blocks, value, onChange }: { blocks: string[]; value: str
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <p className="text-[13px] font-semibold uppercase tracking-wide" style={muted}>{label}</p>
+      <p className="text-[0.8125rem] font-semibold uppercase tracking-wide" style={muted}>{label}</p>
       {children}
       {hint && <p className="text-xs" style={muted}>{hint}</p>}
     </div>
@@ -268,8 +268,8 @@ export function Admin() {
     <section className="space-y-5 pb-10">
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="ios-title text-[30px] leading-tight sm:text-[36px]">Сотрудники и доступ</h1>
-          <p className="mt-1 max-w-2xl text-[15px]" style={muted}>
+          <h1 className="ios-title text-[1.875rem] leading-tight sm:text-[2.25rem]">Сотрудники и доступ</h1>
+          <p className="mt-1 max-w-2xl text-[0.9375rem]" style={muted}>
             Кто работает в системе, какие блоки им открыты и что менялось. Администратор видит всё, менеджер — только свои блоки.
           </p>
         </div>
@@ -333,7 +333,7 @@ export function Admin() {
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-bold" style={{ background: "var(--app-accent-soft)", color: "var(--app-accent-text)" }}>{initialsOf(user)}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-semibold">{user.name || user.email}{user.id === me.data?.id && <span className="font-normal" style={muted}> · это вы</span>}</span>
-                  <span className="block truncate text-[13px]" style={muted}>
+                  <span className="block truncate text-[0.8125rem]" style={muted}>
                     {user.email}
                     {user.role === "manager" && ` · ${parseManagedBlocks(user.managedBlocks).join(", ") || "блоки не назначены"}`}
                   </span>
@@ -394,7 +394,7 @@ export function Admin() {
           <div className="ios-card space-y-3 p-5 self-start">
             <h2 className="ios-widget-label">История договора</h2>
             <p className="text-sm" style={muted}>Кто и когда открывал, создавал или менял договор.</p>
-            <select value={contractId} onChange={event => setContractId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[15px] outline-none">
+            <select value={contractId} onChange={event => setContractId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[0.9375rem] outline-none">
               <option value="">Выберите договор</option>
               {(contracts.data ?? []).map(contract => <option key={contract.id} value={String(contract.id)}>{contract.contractNumber ? `№ ${contract.contractNumber} · ` : ""}{contract.tenantName}</option>)}
             </select>
@@ -427,7 +427,7 @@ export function Admin() {
           </div>
           <div className="ios-card space-y-4 p-5">
             <div className="flex items-center gap-3"><span className="ios-tile h-9 w-9 rounded-[9px]" style={{ background: "#5856d6" }}><FileLock2 /></span><div><h2 className="font-semibold">Доступ к отдельному скану</h2><p className="text-sm" style={muted}>Исключение из общих правил: открыть или закрыть один документ.</p></div></div>
-            <select value={documentId} onChange={event => setDocumentId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[15px] outline-none">
+            <select value={documentId} onChange={event => setDocumentId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[0.9375rem] outline-none">
               <option value="">Выберите документ</option>
               {(documents.data ?? []).map(doc => {
                 const contract = contracts.data?.find(item => item.id === doc.contractId);
@@ -435,7 +435,7 @@ export function Admin() {
               })}
             </select>
             <Segmented label="Для кого" value={permissionTarget} onChange={value => { setPermissionTarget(value); setPermissionId(""); }} options={[{ value: "department", label: "Подразделение" }, { value: "user", label: "Сотрудник" }]} />
-            <select value={permissionId} onChange={event => setPermissionId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[15px] outline-none">
+            <select value={permissionId} onChange={event => setPermissionId(event.target.value)} className="h-10 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[0.9375rem] outline-none">
               <option value="">{permissionTarget === "user" ? "Выберите сотрудника" : "Выберите подразделение"}</option>
               {permissionTarget === "user"
                 ? people.map(user => <option key={user.id} value={String(user.id)}>{user.name || user.email}</option>)
@@ -456,7 +456,7 @@ export function Admin() {
             </div>
             {permissions.data?.length ? (
               <div className="space-y-2 pt-1">
-                <p className="text-[13px] font-semibold uppercase tracking-wide" style={muted}>Правила для документа</p>
+                <p className="text-[0.8125rem] font-semibold uppercase tracking-wide" style={muted}>Правила для документа</p>
                 {permissions.data.map(rule => (
                   <div key={rule.id} className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ background: "var(--app-surface-2)" }}>
                     <span className="flex-1">{rule.userId ? nameOf(rule.userId) : departmentOf(rule.departmentId) ?? "Подразделение"} — <b style={{ color: rule.canView === "yes" ? "var(--app-success)" : "var(--app-danger)" }}>{rule.canView === "yes" ? "разрешено" : "запрещено"}</b></span>
@@ -483,10 +483,10 @@ export function Admin() {
             }}
           >
             <div className="ios-group">
-              <input className="h-12 w-full border-0 bg-transparent px-4 text-[16px] outline-none" placeholder="Имя и фамилия" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} required aria-label="Имя и фамилия" />
+              <input className="h-12 w-full border-0 bg-transparent px-4 text-[1rem] outline-none" placeholder="Имя и фамилия" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} required aria-label="Имя и фамилия" />
               <div className="ml-4 h-px" style={{ background: "var(--app-sep)" }} />
               <label className="flex items-center gap-2 pr-4">
-                <input className="h-12 w-full border-0 bg-transparent px-4 text-[16px] outline-none" type="email" placeholder="Рабочий email" value={draft.email} onChange={event => setDraft({ ...draft, email: event.target.value })} required aria-label="Рабочий email" />
+                <input className="h-12 w-full border-0 bg-transparent px-4 text-[1rem] outline-none" type="email" placeholder="Рабочий email" value={draft.email} onChange={event => setDraft({ ...draft, email: event.target.value })} required aria-label="Рабочий email" />
                 <Mail className="h-4 w-4 shrink-0" style={{ color: "var(--app-fg-3)" }} />
               </label>
             </div>
@@ -499,13 +499,13 @@ export function Admin() {
               </Field>
             )}
             <Field label="Подразделение">
-              <select value={draft.departmentId} onChange={event => setDraft({ ...draft, departmentId: event.target.value })} className="h-11 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[15px] outline-none">
+              <select value={draft.departmentId} onChange={event => setDraft({ ...draft, departmentId: event.target.value })} className="h-11 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[0.9375rem] outline-none">
                 <option value="none">Без подразделения</option>
                 {(departments.data ?? []).map(dept => <option key={dept.id} value={String(dept.id)}>{dept.name}</option>)}
               </select>
             </Field>
             {actionError && <p role="alert" className="rounded-xl px-3 py-2 text-sm" style={toneStyle.danger}>{actionError}</p>}
-            <Button type="submit" className="h-12 w-full rounded-full text-[16px]" disabled={createUser.isPending || !draft.name.trim() || !draft.email.trim()}>
+            <Button type="submit" className="h-12 w-full rounded-full text-[1rem]" disabled={createUser.isPending || !draft.name.trim() || !draft.email.trim()}>
               <KeyRound className="h-4 w-4" />{createUser.isPending ? "Создаём…" : "Добавить и получить пароль"}
             </Button>
           </form>
@@ -544,7 +544,7 @@ export function Admin() {
                     </Field>
                   )}
                   <Field label="Подразделение">
-                    <select value={selected.departmentId ? String(selected.departmentId) : "none"} onChange={event => saveUser(selected, { departmentId: event.target.value === "none" ? null : Number(event.target.value) })} className="h-11 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[15px] outline-none">
+                    <select value={selected.departmentId ? String(selected.departmentId) : "none"} onChange={event => saveUser(selected, { departmentId: event.target.value === "none" ? null : Number(event.target.value) })} className="h-11 w-full rounded-[10px] border-0 bg-[var(--app-fill)] px-3 text-[0.9375rem] outline-none">
                       <option value="none">Без подразделения</option>
                       {(departments.data ?? []).map(dept => <option key={dept.id} value={String(dept.id)}>{dept.name}</option>)}
                     </select>
