@@ -87,6 +87,9 @@ async function readPdf(bytes: Uint8Array) {
         texts.push(result.text);
         confidences.push(result.confidence);
         usedOcr = true;
+        // Enough already? Then skip the remaining pages (each scanned page costs ~5–10 s).
+        const soFar = parseContractText(texts.join("\n\n"), 0.9);
+        if (index !== pageIndexes[pageIndexes.length - 1] && soFar.tenantName && soFar.startDate && soFar.endDate && soFar.tariffAmount && soFar.propertyName && soFar.unitName) break;
       } finally {
         page.destroy?.();
       }
@@ -126,7 +129,15 @@ const isoDate = (d: string, m: string, y: string) => {
 };
 const DATE_NUM = /(\d{1,2})\s*[.\/-]\s*(\d{1,2})\s*[.\/-]\s*(\d{4}|\d{2})(?!\d)/;
 const DATE_WORD = /«?\s*(\d{1,2})\s*»?\s+([А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]{3,})\s+(\d{4})/;
+const EN_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DATE_EN = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})|(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December),?\s+(\d{4})/i;
 function parseDate(text: string): string | null {
+  const en = text.match(DATE_EN);
+  const enIdx = en?.index ?? Infinity;
+  if (en && enIdx <= (text.match(DATE_NUM)?.index ?? Infinity) && enIdx <= (text.match(DATE_WORD)?.index ?? Infinity)) {
+    const month = String(EN_MONTHS.indexOf((en[1] ?? en[5]).slice(0, 3).toLowerCase()) + 1);
+    return isoDate(en[2] ?? en[4], month, en[3] ?? en[6]);
+  }
   const numeric = text.match(DATE_NUM);
   const word = text.match(DATE_WORD);
   const nIdx = numeric?.index ?? Infinity;
@@ -138,12 +149,14 @@ function parseDate(text: string): string | null {
   if (numeric) return isoDate(numeric[1], numeric[2], numeric[3]);
   return null;
 }
-const ANY_DATE = new RegExp(`${DATE_NUM.source}|${DATE_WORD.source}`, "gu");
+const ANY_DATE = new RegExp(`${DATE_NUM.source}|${DATE_WORD.source}|${DATE_EN.source}`, "giu");
 
 const NAME_WORD = "[А-ЯЁӘҒҚҢӨҰҮҺІA-Z][а-яёәғқңөұүһіa-z'’-]+";
 const FULL_NAME = new RegExp(`(${NAME_WORD}(?:\\s+${NAME_WORD}){1,3})`, "u");
+const ANY_NAME_WORD = "(?:[А-ЯЁӘҒҚҢӨҰҮҺІA-Z][а-яёәғқңөұүһіa-z'’-]+|[А-ЯЁӘҒҚҢӨҰҮҺІA-Z]{2,}(?:-[А-ЯЁA-Z]{2,})?)";
+const ANY_NAME = `(${ANY_NAME_WORD}(?:\\s+${ANY_NAME_WORD}){1,3})(?![\\p{L}])`;
 const TENANT_ROLES = "(?:Проживающ\\p{L}*|Заказчик\\p{L}*|Потребител\\p{L}*|Арендатор\\p{L}*|Наниматель\\p{L}*|Студент\\p{L}*|Жилец\\p{L}*|Тұрушы\\p{L}*)";
-const NOT_A_NAME = /^(Частное|Учреждение|University|Service|Management|Исполнитель|Договор|Республик|Товарищество|Именуем|Настоящ|Сторон)/i;
+const NOT_A_NAME = /^(Телефон|Должност|Электрон|Заявител|Паспорт|Passport|Частное|Учреждение|University|Service|Management|Исполнитель|Договор|Республик|Товарищество|Именуем|Настоящ|Сторон)/i;
 
 function clean(value: string | null | undefined) {
   const text = (value ?? "").replace(/\s+/g, " ").replace(/^[\s,.;:«»"]+|[\s,;:«»"]+$/g, "").trim();
@@ -157,6 +170,16 @@ function findTenantName(text: string) {
   for (const match of Array.from(flat.matchAll(beforeRole))) {
     const name = clean(match[1]);
     if (name && !NOT_A_NAME.test(name)) return { value: name, confidence: 0.85 };
+  }
+  // Application for joining the contract: «прошу предоставить, Nancy Lee Stitt (паспорт № …)»
+  const applicant = new RegExp(`[Пп]рошу\\s+предостав\\p{L}*\\s*[,:]?\\s*${ANY_NAME}`, "u");
+  const applicantName = clean(flat.match(applicant)?.[1]);
+  if (applicantName && !NOT_A_NAME.test(applicantName)) return { value: applicantName, confidence: 0.85 };
+  // «Nancy Lee Stitt (passport № …)» in the act / requisites
+  const withPassport = new RegExp(`${ANY_NAME}\\s*[,(]\\s*(?:паспорт|passport|удостоверени)`, "gu");
+  for (const match of Array.from(flat.matchAll(withPassport))) {
+    const name = clean(match[1]);
+    if (name && !NOT_A_NAME.test(name)) return { value: name, confidence: 0.75 };
   }
   // Requisites block: «Проживающий: Иванов Иван Иванович»
   const afterRole = new RegExp(`${TENANT_ROLES}\\s*[:\\-–]?\\s*(?:ФИО\\s*[:\\-]?\\s*)?${FULL_NAME.source}`, "gu");
@@ -185,7 +208,7 @@ const normalizePhone = (raw: string) => {
 
 function findMoney(text: string) {
   const flat = text.replace(/\s+/g, " ");
-  const priceContext = /(стоимост\p{L}*|плат\p{L}*|ставк\p{L}*|тариф\p{L}*|сумм\p{L}*|составляет)[^.]{0,120}?(\d{1,3}(?:[  ]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
+  const priceContext = /(стоимост\p{L}*|плат\p{L}*|ставк\p{L}*|тариф\p{L}*|сумм\p{L}*|составляет|fee|rate|price|cost)[^.]{0,120}?(\d{1,3}(?:[  ]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
   const match = flat.match(priceContext) ?? flat.match(/(?:^|\s)()(\d{1,3}(?:[  ]\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/i);
   if (!match) return { amount: null as number | null, confidence: 0, tail: "" };
   const amount = Number(match[2].replace(/[  ]/g, "")) + (match[3] ? Number(match[3]) / 100 : 0);
@@ -193,27 +216,50 @@ function findMoney(text: string) {
   return { amount: amount > 0 ? amount : null, confidence: match[1] ? 0.8 : 0.55, tail };
 }
 
+const MISSING_PREFIX = "Не удалось уверенно найти:";
+function missingFieldsWarning(values: Record<"tenantName" | "startDate" | "endDate" | "tariffAmount", unknown>) {
+  const labels = { tenantName: "плательщик", startDate: "дата начала", endDate: "дата окончания", tariffAmount: "ставка" } as const;
+  const missing = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => !values[key]);
+  return missing.length ? `${MISSING_PREFIX} ${missing.map(key => labels[key]).join(", ")} — заполните вручную.` : null;
+}
+
+/** All NU apartment blocks (38, 39, 44, 45) are on one campus address. */
+export const CAMPUS_ADDRESS = "г. Астана, пр. Кабанбай батыра 53";
+const CAMPUS_STREET = /(?:Кабанба\p{L}*|Kabanba\p{L}*|Ka[GбБb6]a[uнnh][GбБb6]a\p{L}*|К[аa]б[аa]нб[аa]\p{L}*)/iu;
+
+/** Passport / ID details carry their own numbers and dates — they must not be taken for the contract's. */
+const stripPersonalIds = (text: string) => text
+  .replace(/\(\s*(?:паспорт|passport|удостоверени|уд\.\s*личн|ID\b)[^)]{0,120}\)/giu, " ")
+  .replace(/(?:паспорт\p{L}*|passport|удостоверени\p{L}*\s+личност\p{L}*)\s*(?:№|N[ºo°e]?|No\.?)?\s*[A-ZА-Я]?\d{6,12}(?:[^.\n]{0,40}?(?:от|выдан\p{L}*|issue\s+date)\s*[\d.\/-]{8,10})?/giu, " ")
+  .replace(/ИИН\s*:?\s*\d{12}/gu, " ");
+
+/** The header date must not be confused with the stay period that follows it. */
+const beforePeriod = (zone: string) => { const at = zone.search(/срок\p{L}*\s+(?:проживан|найм|действ)|период\p{L}*\s+проживан|(?<![\p{L}\d])с\s+«?\d{1,2}/iu); return at >= 0 ? zone.slice(0, at) : zone; };
+
 export function parseContractText(rawText: string, ocrConfidence = 0.9) {
-  const text = rawText.replace(/\r/g, "").replace(/(^|[\s,(«])т\.\s*(?=[А-ЯЁ])/gu, "$1г. ").replace(/[“”„]/g, "\"").replace(/[‐‑‒–—]/g, "-");
-  const flat = text.replace(/\s+/g, " ");
+  const text = rawText.replace(/\r/g, "").replace(/(^|[\s,(«])т\.\s*(?=[А-ЯЁ])/gu, "$1г. ").replace(/[“”„]/g, "\"").replace(/[‐‑‒–—]/g, "-")
+    .replace(/(^|[\s,])np\.\s*/gu, "$1пр. ").replace(/(^|[\s,])(?:kn|kв|кb)\.(?=\s*\d)/gu, "$1кв.");
+  const flat = stripPersonalIds(text).replace(/\s+/g, " ");
   const fieldConfidence: Record<string, number> = {};
   const warnings: string[] = [];
   const scale = (value: number) => Math.round(Math.min(1, value * Math.max(0.55, ocrConfidence)) * 100) / 100;
 
   // Number and date: «ДОГОВОР № 0294-2026/08-23 ... от «07» июля 2026 г.»
-  const numberMatch = flat.match(/Договор\p{L}*\s*(?:№|N[ºo°]?|No\.?)\s*([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9\-\/._]{1,40})/iu) ?? flat.match(/№\s*([0-9][A-Za-zА-Яа-я0-9\-\/._]{2,40})/);
+  const numberMatch = flat.match(/Договор\p{L}*\s*(?:№|N[ºo°]?|No\.?)\s*([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9\-\/._]{1,40})/iu) ?? flat.match(/(?<!(?:паспорт\S*|passport|удостоверени\S*)\s*)№\s*([0-9][A-Za-zА-Яа-я0-9\-\/._]{2,40})/iu);
   const contractNumber = clean(numberMatch?.[1]?.replace(/[.,;]+$/, "")) ;
   fieldConfidence.contractNumber = contractNumber ? scale(0.9) : 0;
-  const headerZone = numberMatch?.index != null ? flat.slice(numberMatch.index, numberMatch.index + 400) : flat.slice(0, 600);
-  const contractDate = parseDate(headerZone.replace(/^Договор[^0-9]*[0-9A-Za-zА-Яа-я\-\/._]+/i, "")) ?? parseDate(flat.slice(0, 800));
+  const headerZone = numberMatch?.index != null ? flat.slice(numberMatch.index, numberMatch.index + 400) : beforePeriod(flat.slice(0, 600));
+  const contractDate = parseDate(headerZone.replace(/^Договор[^0-9]*[0-9A-Za-zА-Яа-я\-\/._]+/i, "")) ?? parseDate(beforePeriod(flat.slice(0, 800)));
   fieldConfidence.contractDate = contractDate ? scale(0.8) : 0;
 
   const tenant = findTenantName(text);
   fieldConfidence.tenantName = scale(tenant.confidence);
 
   const section = tenantSection(text) || text;
-  const phones = Array.from(section.matchAll(PHONE)).map(m => m[0]);
-  const allPhones = Array.from(text.matchAll(PHONE)).map(m => m[0]);
+  // Only numbers that look like a phone in context — inventory tables are full of long digit runs.
+  const phoneLike = (source: string) => Array.from(source.matchAll(PHONE)).filter(m => m[0].trim().startsWith("+7") || /(тел\p{L}*|phone|моб\p{L}*|сот\p{L}*|cell|контакт\p{L}*|whats\s*app)[^\n]{0,40}$/iu.test(source.slice(Math.max(0, (m.index ?? 0) - 60), m.index))).map(m => m[0]);
+  const phones = phoneLike(section);
+  const allPhones = phoneLike(text);
   const phone = phones[0] ?? (allPhones.length > 1 ? allPhones[allPhones.length - 1] : null);
   const tenantContact = phone ? normalizePhone(phone) : null;
   fieldConfidence.tenantContact = tenantContact ? scale(phones.length ? 0.8 : 0.5) : 0;
@@ -224,7 +270,8 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
   fieldConfidence.tenantEmail = tenantEmail ? scale(emails.length ? 0.85 : 0.55) : 0;
 
   // Period: «с 01.09.2026 по 30.06.2027», «срок проживания ... до ...»
-  const periodMatch = flat.match(new RegExp(`(?:срок\\p{L}*|период\\p{L}*|проживан\\p{L}*)[^.]{0,80}?(?<![\\p{L}\\d])с\\s+(.{6,30}?)\\s+(?:по|до)\\s+(.{6,30}?)(?:[.;,)]|\\s+(?:г|год|включ))`, "iu")) ?? flat.match(/(?<![\p{L}\d])с\s+(\S.{5,28}?)\s+(?:по|до)\s+(\S.{5,28}?)(?:[.;,)]|\s+г)/iu);
+  const enPeriod = flat.match(new RegExp(`(?:period|term)[^.]{0,60}?from\\s+(${DATE_EN.source})\\s+(?:till|to|until|through)\\s+(${DATE_EN.source})`, "iu"));
+  const periodMatch: string[] | null = enPeriod ? [enPeriod[0], enPeriod[1], enPeriod[8]] : flat.match(new RegExp(`(?:срок\\p{L}*|период\\p{L}*|проживан\\p{L}*)[^.]{0,80}?(?<![\\p{L}\\d])с\\s+(.{6,30}?)\\s+(?:по|до)\\s+(.{6,30}?)(?:[.;,)]|\\s+(?:г|год|включ))`, "iu")) ?? flat.match(/(?<![\p{L}\d])с\s+(\S.{5,28}?)\s+(?:по|до)\s+(\S.{5,28}?)(?:[.;,)]|\s+г)/iu);
   let startDate = periodMatch ? parseDate(periodMatch[1]) : null;
   let endDate = periodMatch ? parseDate(periodMatch[2]) : null;
   if (!startDate || !endDate) {
@@ -248,19 +295,22 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
   // Address and room
   // «по адресу: г. Астана, пр. Кабанбай батыра 53, Блок 38, комната № 510.» → address without the room part
   let propertyName: string | null = null;
-  const addressHead = /(?:по\s+адресу|адрес\s+проживания|адрес\s+объекта)\s*:?\s*/iu;
+  const addressHead = /(?:по\s+адр\p{L}{2,4}|адрес\s+проживания|адрес\s+объекта|located\s+at)\s*:?\s*/iu;
   const addressAt = flat.search(addressHead);
   if (addressAt >= 0) {
     const rest = flat.slice(addressAt).replace(addressHead, "").slice(0, 200);
-    const cuts = [rest.search(/[,;]?\s*(?:комнат|квартир|кв\.|помещени|room|бөлме)/iu), rest.search(/\.\s+(?=\d+\.\d|[А-ЯЁ]{3,}|$)|;|\.$/u)].filter(n => n > 0);
+    const cuts = [rest.search(/[,;]?\s*(?:комнат|квартир|кв\.|помещени|room|бөлме)/iu), rest.search(/\.\s+(?=\d+\.\d|[А-ЯЁ]{3,}|$)|;|\.$/u), rest.search(/\s*\/\s*(?=[A-Z])/u)].filter(n => n > 0);
     const cut = cuts.length ? Math.min(...cuts) : -1;
     propertyName = clean(cut > 0 ? rest.slice(0, cut) : rest.slice(0, 120));
   }
   const addressMatch = propertyName;
-  const blockMatch = flat.match(/(?<![\p{L}\d])Блок\p{L}*\s*[№#]?\s*([A-ZА-Я]?\d{1,3}[A-ZА-Я]?)(?![\p{L}\d])/iu);
+  const blockMatch = flat.match(/(?<![\p{L}\d])(?:Блок\p{L}*|Block)\s*[№#]?\s*([A-ZА-Я]?\d{1,3}[A-ZА-Я]?)(?![\p{L}\d])/iu);
+  // OCR garbles the street name in mixed RU/EN lines («np.KaGauGaii батыра 53») — the campus address is well known.
+  const addressZone = addressAt >= 0 ? flat.slice(addressAt, addressAt + 400) : "";
+  if (addressZone && CAMPUS_STREET.test(addressZone)) propertyName = blockMatch ? `${CAMPUS_ADDRESS}, Блок ${blockMatch[1]}` : CAMPUS_ADDRESS;
   if (!propertyName && blockMatch) propertyName = `Блок ${blockMatch[1]}`;
   fieldConfidence.propertyName = propertyName ? scale(addressMatch ? 0.75 : 0.5) : 0;
-  const unitMatch = flat.match(/(?:комнат\p{L}*|квартир\p{L}*|(?<![\p{L}\d])кв\.|помещени\p{L}*|room|бөлме)\s*№?\s*([0-9]{1,5}[A-Za-zА-Яа-я]?(?:[\-\/][0-9A-Za-zА-Яа-я]+)?)/iu);
+  const unitMatch = flat.match(/(?:комнат\p{L}*|квартир\p{L}*|(?<![\p{L}\d])кв\.|помещени\p{L}*|room|apt\.?|apartment|бөлме)\s*№?\s*([0-9]{1,5}[A-Za-zА-Яа-я]?(?:[\-\/][0-9A-Za-zА-Яа-я]+)?)/iu);
   const unitName = clean(unitMatch?.[1]);
   fieldConfidence.unitName = unitName ? scale(0.8) : 0;
 
@@ -269,8 +319,8 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
 
   const found = Object.entries(fieldConfidence).filter(([key, value]) => key !== "status" && value > 0);
   const confidence = found.length ? Math.round((found.reduce((sum, [, v]) => sum + v, 0) / 11) * 100) / 100 : 0;
-  const missing = ["tenantName", "startDate", "endDate", "tariffAmount"].filter(key => !fieldConfidence[key]);
-  if (missing.length) warnings.push(`Не удалось уверенно найти: ${missing.map(key => ({ tenantName: "плательщик", startDate: "дата начала", endDate: "дата окончания", tariffAmount: "ставка" } as Record<string, string>)[key]).join(", ")} — заполните вручную.`);
+  const missingText = missingFieldsWarning({ tenantName: tenant.value, startDate, endDate, tariffAmount });
+  if (missingText) warnings.push(missingText);
   if (ocrConfidence < 0.6) warnings.push("Скан плохого качества: проверьте все поля особенно внимательно.");
 
   return {
@@ -278,4 +328,57 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     startDate, endDate, tariffType: tariffType as "monthly" | "daily" | null, tariffAmount, status: status as "active" | "ended",
     confidence, fieldConfidence, warnings,
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// File name → number, date, tenant («0531-2026-08-23 от 31.08.2026г. Nancy Lee Stitt аренда 44 блок.pdf»)
+// Staff name the scans themselves, so for scanned (not text) PDFs the file name is more reliable than OCR.
+// ---------------------------------------------------------------------------------------------
+/** «0531-2026-08-23» → «0531-2026/08-23»: a slash cannot be used in file names. */
+export const restoreContractNumber = (value: string) => value.replace(/^(\d{3,5}-\d{4})-(\d{2}-\d{2})$/, "$1/$2");
+
+export function identityFromFileName(fileName?: string) {
+  const base = String(fileName ?? "").replace(/\.[^.]+$/, "").replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  const empty = { contractNumber: null as string | null, contractDate: null as string | null, tenantName: null as string | null, block: null as string | null };
+  if (!base) return empty;
+  const dated = base.match(/^(.*?)\s+(?:от|from)\s+(?:(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})|(\d{4})-(\d{1,2})-(\d{1,2}))\s*(?:г\.?|года?)?\s*(.*)$/iu);
+  const numberPart = dated ? dated[1] : base.match(/^(?:№\s*)?([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./_-]*)/u)?.[1] ?? "";
+  const contractNumber = numberPart.replace(/^№\s*/u, "").trim() ? restoreContractNumber(numberPart.replace(/^№\s*/u, "").trim()) : null;
+  const contractDate = dated ? (dated[2] ? isoDate(dated[2], dated[3], dated[4]) : isoDate(dated[7], dated[6], dated[5])) : null;
+  const rest = dated?.[8] ?? "";
+  const block = rest.match(/(?<![\p{L}\d])(?:блок\s*(\d{2,3})|(\d{2,3})\s*блок)/iu);
+  // The name is what is left before words like «аренда», «блок», «кв», numbers.
+  const nameRaw = rest.split(/\s+(?=(?:аренд|найм|проживан|договор|блок|block|кв\.?|комн|доп|ds|\d))/iu)[0] ?? "";
+  const nameWords = nameRaw.split(" ").filter(word => /^[\p{Lu}][\p{L}'’-]*$/u.test(word));
+  return { contractNumber, contractDate, tenantName: nameWords.length >= 2 && nameWords.length <= 4 ? nameWords.join(" ") : null, block: block ? block[1] ?? block[2] : null };
+}
+
+type ParsedScan = ReturnType<typeof parseContractText>;
+const digitsAndLetters = (value: string | null | undefined) => String(value ?? "").replace(/[^\p{L}\d]/gu, "").toLowerCase();
+
+/** Combines what was read from the scan with what the file name says. */
+export function mergeWithFileName(fields: ParsedScan, fileName: string | undefined, usedOcr: boolean): ParsedScan {
+  const id = identityFromFileName(fileName);
+  const out = { ...fields, fieldConfidence: { ...fields.fieldConfidence }, warnings: [...fields.warnings] };
+  const take = (key: "contractNumber" | "contractDate" | "tenantName", value: string | null, confidence: number) => {
+    if (!value) return;
+    const current = out[key];
+    const agrees = current && (digitsAndLetters(current) === digitsAndLetters(value)
+      // «Кадиржанов Ерасыл Айтуганович» from the scan is fuller than «Кадиржанов Ерасыл» in the file name
+      || (key === "tenantName" && value.toLowerCase().split(/\s+/).every(word => current.toLowerCase().split(/\s+/).includes(word))));
+    if (agrees) { out.fieldConfidence[key] = Math.max(out.fieldConfidence[key] ?? 0, 0.95); return; }
+    // Text PDFs are exact — keep them; OCR of a scan loses to the name the manager typed.
+    if (!current || usedOcr) { out[key] = value; out.fieldConfidence[key] = confidence; }
+  };
+  take("contractNumber", id.contractNumber, 0.9);
+  take("contractDate", id.contractDate, 0.9);
+  take("tenantName", id.tenantName, 0.8);
+  if (id.block && !out.propertyName) { out.propertyName = `${CAMPUS_ADDRESS}, Блок ${id.block}`; out.fieldConfidence.propertyName = 0.6; }
+  if (id.block && out.propertyName && !/Блок/iu.test(out.propertyName)) out.propertyName = `${out.propertyName}, Блок ${id.block}`;
+  const found = Object.entries(out.fieldConfidence).filter(([key, value]) => key !== "status" && value > 0);
+  out.confidence = found.length ? Math.round((found.reduce((sum, [, v]) => sum + v, 0) / 11) * 100) / 100 : 0;
+  out.warnings = out.warnings.filter(w => !w.startsWith(MISSING_PREFIX));
+  const missingText = missingFieldsWarning(out);
+  if (missingText) out.warnings.push(missingText);
+  return out;
 }

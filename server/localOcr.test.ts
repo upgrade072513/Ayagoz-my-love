@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseContractText } from "./localOcr";
+import { identityFromFileName, mergeWithFileName, parseContractText } from "./localOcr";
 
 describe("in-house contract text parser", () => {
   it("reads a typical NU accommodation contract", () => {
@@ -37,5 +37,61 @@ describe("in-house contract text parser", () => {
     expect(result.tenantName).toBeNull();
     expect(result.tariffAmount).toBeNull();
     expect(result.warnings.join(" ")).toContain("заполните вручную");
+  });
+
+  it("reads the scanned application form + acceptance act (bilingual, OCR noise)", () => {
+    const text = `ЗАЯВЛЕНИЕ О ПРИСОЕДИНЕНИИ
+К ДОГОВОРУ УСЛУГ ПРОЖИВАНИЯ (для физического лица)
+т 0%%- 2048/0 ~ £3 -”
+Астана                                              « 3 »    6%        2026
+В соответствии с Вашим  поручением/решением, прошу предоставить, Jane Ann Doe
+(паспорт №А12345678 от 10.08.2023),
+Телефоны: раб.                                  , COT.
+Срок проживания: с 30 августа 2026 года по 22 сентября 2026 года.
+Стоимость услуг проживания в день (с учетом  затрат на коммунальные и
+эксплуатационные расходы): 7 500 (семь тысяч пятьсот) тенге с учетом НДС.
+Общая стоимость услуг проживания: 180 000 (сто восемьдесят тысяч) тенге с учетом НДС.
+
+АКТ ПРИЕМА-ПЕРЕДАЧИ / ACCEPTANCE AND TRANSFER CERTIFICATE
+4   1. Учреждение передало, a Проживающий принял Жилище, расположенное по адресу: г. Астана, np.KaGauGaii батыра 53, Блок 44, kn. 1003 /The
+Entity transfered ond a Tenant accepted the Housing located at: Kabanbay Batyr Аус. 53, Block 44, apt. 1003 Astana.
+1) количество комнат / number of bedrooms: 1;`;
+    const result = parseContractText(text, 0.7);
+    expect(result).toMatchObject({
+      contractNumber: null, contractDate: null, tenantName: "Jane Ann Doe",
+      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44", unitName: "1003",
+      startDate: "2026-08-30", endDate: "2026-09-22", tariffType: "daily", tariffAmount: 7500,
+    });
+    const merged = mergeWithFileName(result, "0531-2026-08-23 от 31.08.2026г. Jane Ann Doe аренда 44 блок.PDF", true);
+    expect(merged).toMatchObject({ contractNumber: "0531-2026/08-23", contractDate: "2026-08-31", tenantName: "Jane Ann Doe" });
+    expect(merged.warnings.join(" ")).not.toContain("Не удалось");
+  });
+
+  it("takes number, date, tenant and block from the file name", () => {
+    expect(identityFromFileName("0531-2026-08-23 от 31.08.2026г. Nancy Lee Stitt аренда 44 блок.PDF")).toEqual({ contractNumber: "0531-2026/08-23", contractDate: "2026-08-31", tenantName: "Nancy Lee Stitt", block: "44" });
+    expect(identityFromFileName("№ 0475-2026/08-23 от 01.09.2026.pdf")).toMatchObject({ contractNumber: "0475-2026/08-23", contractDate: "2026-09-01", tenantName: null });
+    // a text-layer PDF keeps its own exact number
+    const parsed = parseContractText("Договор № 0294-2026/08-23 от 07.07.2026", 0.98);
+    expect(mergeWithFileName(parsed, "0294-2026-08-23 от 07.07.2026.pdf", false).contractNumber).toBe("0294-2026/08-23");
+  });
+
+  it("reads the English accession statement and keeps the full name from the scan", () => {
+    const text = `ACCESSION STATEMENT
+TO THE ACCOMMODATION SERVICES CONTRACT (for person)
+No. 024.- 4046/ 07-43
+In accordance with your instruction\\decision, you are kindly requested to provide John Peter Smith
+(passport Х>Е9410959, issue date 21 02.2017),
+Accommodation period from January 01, 2026 till December 30, 2026.
+Accommodation fee per month (without utility and operating costs): 127 600 (one hundred twenty seven
+thousand six hundred) KZT.
+Stul obedenny SD-3 | USM018229   11       2495799)   24957,99
+1, Учреждение передало, а Проживающий принял Жилище, расположенное по адрсеу: г. Астаны, np KaGanGat батыра 53, Блок 44, ка. 1004 /The Entity transferred
+anda Tenant accepted the Housing located at: Kabanbay Batyr Ave. 53, Block 44, apt. 1004 Astana.`;
+    const result = parseContractText(text, 0.7);
+    expect(result).toMatchObject({
+      tenantName: "John Peter Smith", propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44", unitName: "1004",
+      startDate: "2026-01-01", endDate: "2026-12-30", tariffType: "monthly", tariffAmount: 127600, tenantContact: null, contractDate: null,
+    });
+    expect(mergeWithFileName(result, "072-2026-08-23 от 28.01.2026г. John Smith аренда 44 блока.pdf", true).tenantName).toBe("John Peter Smith");
   });
 });
