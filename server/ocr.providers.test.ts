@@ -99,6 +99,42 @@ describe("automatic scan recognition", () => {
     );
   });
 
+  it("AI fields are combined with the contract number from the scan's file name", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "a-key");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    ...reply,
+                    contractNumber: null,
+                    tenantName: "Nancy Lee Stitt",
+                  }),
+                },
+              ],
+            })
+          )
+      )
+    );
+    const result = await caller().contracts.previewScan({
+      dataUrl: pdf,
+      mimeType: "application/pdf",
+      fileName: "0531-2026-08-23 от 31.08.2026г. Nancy Lee Stitt аренда 44 блок.PDF",
+    });
+    expect(result).toMatchObject({
+      contractNumber: "0531-2026/08-23",
+      tenantName: "Nancy Lee Stitt",
+      tariffAmount: 162400,
+    });
+    expect(result.warnings.join(" ")).toMatch(/Распознано ИИ/);
+  });
+
   it("falls back to the file name with a clear warning when the service rejects the key", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("GEMINI_API_KEY", "bad");
@@ -123,7 +159,7 @@ describe("automatic scan recognition", () => {
       confidence: 0,
     });
     // The provider's own error text (may contain keys/URLs) is logged, not shown to the user.
-    expect(result.warnings[0]).toContain("Автораспознавание не сработало");
+    expect(result.warnings.join(" ")).toMatch(/ИИ-распознавание/);
     expect(result.warnings.join(" ")).not.toContain("API key");
   });
 });

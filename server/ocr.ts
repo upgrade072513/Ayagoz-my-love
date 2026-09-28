@@ -137,11 +137,16 @@ export function getOcrProvider(): OcrProvider | null {
 }
 
 export const OCR_FIELDS_PROMPT = [
-  "Извлеки реквизиты договора из приложенного скана и верни ОДИН JSON-объект строго с ключами:",
-  "contractNumber (номер договора), contractDate (дата заключения, YYYY-MM-DD), tenantName (плательщик/арендатор, ФИО полностью),",
-  "tenantContact (телефон), tenantEmail, propertyName (объект размещения/адрес), unitName (номер помещения/квартиры),",
-  'startDate и endDate (период проживания, YYYY-MM-DD), tariffType ("monthly" — ставка за месяц, "daily" — за сутки),',
-  'tariffAmount (ставка в тенге, число без пробелов), status ("active", "paused" или "ended"; обычно "active"),',
-  "confidence (общая уверенность 0..1), fieldConfidence (объект: для каждого ключа выше число 0..1), warnings (массив строк на русском о сомнительных полях).",
-  "Неизвестное или нечитаемое поле — null, ничего не придумывай. Верни только JSON без пояснений.",
+  "Извлеки реквизиты договора проживания из приложенного скана и верни ОДИН JSON-объект строго с ключами:",
+  "contractNumber (номер договора), contractDate (дата заключения, YYYY-MM-DD), tenantName (плательщик/жилец, ФИО полностью, как в документе, включая отчество),",
+  "tenantContact (телефон), tenantEmail, propertyName (адрес объекта), unitName (номер квартиры/комнаты), startDate и endDate (период проживания, YYYY-MM-DD),",
+  'tariffType ("monthly" — ставка за месяц, "daily" — за день/сутки), tariffAmount (ставка в тенге, число без пробелов), status ("active", "paused" или "ended"),',
+  "confidence (0..1), fieldConfidence (объект: для каждого ключа число 0..1), warnings (массив строк на русском о сомнительных полях).",
+  "Подсказки по формам Nazarbayev University / University Service Management:",
+  "1) «Заявление о присоединении к договору услуг проживания» (или English «Accession statement»): ФИО стоит после слов «прошу предоставить,» / «you are kindly requested to provide», перед «(паспорт…)» / «(passport…)» или «(уд. личности…)».",
+  "Период — строка «Срок проживания: с … по …» / «Accommodation period from … till …». Ставка — «Стоимость услуг проживания в месяц/в день …: N тенге» / «Accommodation fee per month/day … N KZT» — это tariffAmount (НЕ «Общая стоимость»/«Total»); «в месяц»/«per month» → monthly, «в день»/«per day» → daily.",
+  "2) «Акт приема-передачи»: адрес после «расположенное по адресу:» / «located at:», например «г. Астана, пр. Кабанбай батыра 53, Блок 44, кв. 1003» → propertyName «г. Астана, пр. Кабанбай батыра 53, Блок 44», unitName «1003».",
+  "3) Классический договор: номер и дата в шапке «ДОГОВОР № … от …», жилец — сторона «Проживающий/Наниматель/Tenant».",
+  "Номер договора в шапке часто вписан от руки — если не уверен, верни null. Паспортные данные и даты паспорта НЕ являются датами договора.",
+  "Неизвестное или нечитаемое поле — null, ничего не придумывай. Верни только JSON без пояснений и без markdown.",
 ].join(" ");

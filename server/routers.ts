@@ -726,7 +726,10 @@ async function extractContractFromScan(input: {
     ? cleanDisplayFileName(input.fileName)
     : undefined;
   const provider = getOcrProvider();
+  let aiNote: string | null = null;
   if (provider) {
+    // AI first (reads handwriting, bilingual forms, tables); the file name still wins for the
+    // contract number/date, which are handwritten on the forms and typed by staff in the name.
     try {
       const text = await provider.recognize({
         base64,
@@ -736,15 +739,24 @@ async function extractContractFromScan(input: {
       });
       if (!text.trim())
         throw new Error("Сервис распознавания вернул пустой ответ");
-      return scanResultValidator.parse(withScanDefaults(parseOcrJson(text)));
+      const parsed = scanResultValidator.parse(
+        withScanDefaults(parseOcrJson(text))
+      );
+      const merged = mergeWithFileName(parsed as any, fileName, true);
+      return scanResultValidator.parse(
+        withScanDefaults({
+          ...merged,
+          warnings: [
+            ...merged.warnings,
+            `Распознано ИИ (${provider.name === "anthropic" ? "Claude" : "Gemini"}) — проверьте поля перед сохранением.`,
+          ],
+        })
+      );
     } catch (error) {
       console.warn(`[OCR:${provider.name}]`, error);
-      return buildOcrFallback(
-        fileName,
-        isOcrCapacityError(error)
-          ? undefined
-          : "Автораспознавание не сработало. Номер и дата взяты из имени файла."
-      );
+      aiNote = isOcrCapacityError(error)
+        ? "ИИ-распознавание временно перегружено — использовано встроенное распознавание."
+        : "ИИ-распознавание не сработало — использовано встроенное распознавание.";
     }
   }
   if (
@@ -761,9 +773,11 @@ async function extractContractFromScan(input: {
         usedOcr,
         ...fields
       } = await recognizeLocally({ base64, mimeType });
-      const merged = withScanDefaults(
-        mergeWithFileName(fields, fileName, usedOcr)
-      );
+      const local = mergeWithFileName(fields, fileName, usedOcr);
+      const merged = withScanDefaults({
+        ...local,
+        warnings: aiNote ? [aiNote, ...local.warnings] : local.warnings,
+      });
       return scanResultValidator.parse(merged);
     } catch (error) {
       console.warn("[OCR:local]", error);
@@ -774,7 +788,9 @@ async function extractContractFromScan(input: {
         });
       return buildOcrFallback(
         fileName,
-        "Распознавание не удалось. Номер и дата взяты из имени файла."
+        aiNote
+          ? "ИИ-распознавание и встроенное распознавание не сработали. Номер и дата взяты из имени файла."
+          : "Распознавание не удалось. Номер и дата взяты из имени файла."
       );
     }
   }

@@ -722,7 +722,8 @@ export function identityFromFileName(fileName?: string) {
     : (base.match(
         /^(?:№\s*)?([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./_-]*)/u
       )?.[1] ?? "");
-  const contractNumber = numberPart.replace(/^№\s*/u, "").trim()
+  // A contract number always contains digits ("scan.pdf" or "договор.pdf" carry no number).
+  const contractNumber = /\d/.test(numberPart) && numberPart.replace(/^№\s*/u, "").trim()
     ? restoreContractNumber(numberPart.replace(/^№\s*/u, "").trim())
     : null;
   const contractDate = dated
