@@ -295,11 +295,11 @@ describe("section search wiring", () => {
     const { unmount } = render(<Contracts />);
     fireEvent.click(screen.getByRole("button", { name: "Доп. фильтры" }));
     const comboboxes = screen.getAllByRole("combobox");
-    fireEvent.click(comboboxes[3]);
+    fireEvent.click(comboboxes[2]);
     fireEvent.click(screen.getByText("Суточный", { exact: true }));
     expect(screen.getByText("Анна")).toBeTruthy();
     expect(screen.queryByText("Борис")).toBeNull();
-    fireEvent.click(comboboxes[5]);
+    fireEvent.click(comboboxes[4]);
     fireEvent.click(screen.getByText("Со сканом", { exact: true }));
     expect(screen.getByText("По вашему запросу договоры не найдены.")).toBeTruthy();
     unmount();
