@@ -264,6 +264,19 @@ describe("3. foreign accruals cannot be billed or edited", () => {
       call(ALICE).accruals.updateFromPreview({ id: 13, contractId: 1 })
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
+  it("cannot make accruals for another block, and only the chosen blocks are calculated", async () => {
+    await expect(
+      call(ALICE).accruals.generate({
+        period: "2026-09",
+        blockFolders: ["Блок А2"],
+      })
+    ).rejects.toMatchObject(forbidden);
+    const made = await call(ADMIN).accruals.generate({
+      period: "2026-09",
+      blockFolders: ["Блок А1"],
+    });
+    expect(made.map((row: any) => row.contractId)).toEqual([1]);
+  });
   it("cannot create accruals for another block", async () => {
     await expect(
       call(ALICE).accruals.createStandalone({

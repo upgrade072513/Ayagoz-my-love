@@ -13,7 +13,7 @@
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "db:migrate-auth": "node scripts/migrate-auth.mjs",
     "db:ensure-admin": "node scripts/ensure-admin.mjs",
-    "db:predeploy": "node scripts/migrate-auth.mjs && node scripts/ensure-admin.mjs && node scripts/cleanup-legacy-scans.mjs"
+    "db:predeploy": "node scripts/migrate-auth.mjs && node scripts/ensure-admin.mjs && node scripts/cleanup-legacy-scans.mjs && node scripts/reset-accruals-once.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

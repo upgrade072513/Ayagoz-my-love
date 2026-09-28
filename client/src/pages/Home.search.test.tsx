@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   scanPreviewMutate: vi.fn(),
   scanPreviewResult: null as any,
   createFromScanMutate: vi.fn(),
+  generateMutate: vi.fn(),
+  generateMutateAsync: vi.fn(),
   moveToFolderMutate: vi.fn(),
   documents: [] as any[],
   documentDownloadData: undefined as any,
@@ -49,7 +51,7 @@ vi.mock("@/lib/trpc", () => {
     },
     accruals: {
       list: { useQuery: () => ({ data: mocks.accruals }) },
-      generate: { useMutation },
+      generate: { useMutation: () => ({ mutate: mocks.generateMutate, mutateAsync: mocks.generateMutateAsync, isPending: false }) },
       updateAmount: { useMutation },
       updateEmail: { useMutation },
       remove: { useMutation },
@@ -180,6 +182,23 @@ describe("section search wiring", () => {
     expect(payload.duplicateMode).toBe("new");
     expect(payload.duplicateContractId).toBeUndefined();
     mocks.scanPreviewResult = null;
+  });
+
+  it("never calculates accruals just by opening the tab; only the explicit button does", async () => {
+    mocks.generateMutate.mockReset();
+    mocks.generateMutateAsync.mockReset();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Accruals />);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mocks.generateMutate).not.toHaveBeenCalled();
+    expect(mocks.generateMutateAsync).not.toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: /Сделать начисление за выбранный месяц/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Блок А1" }));
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.generateMutate).toHaveBeenCalledWith(expect.objectContaining({ blockFolders: ["Блок А1"] }));
+    confirm.mockRestore();
   });
 
   it("offers Google Drive Picker next to computer upload", () => {

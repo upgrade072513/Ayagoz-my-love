@@ -1891,6 +1891,12 @@ export const appRouter = router({
         z.object({
           period: periodSchema,
           blockFolder: z.string().trim().max(120).optional(),
+          /** Only these blocks are calculated (chosen explicitly in the UI). */
+          blockFolders: z
+            .array(z.string().trim().min(1).max(120))
+            .min(1)
+            .max(50)
+            .optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1899,6 +1905,11 @@ export const appRouter = router({
           "manageAccruals",
           "Недостаточно прав для генерации начислений"
         );
+        const wantedBlocks = new Set(
+          input.blockFolders ?? (input.blockFolder ? [input.blockFolder] : [])
+        );
+        for (const block of Array.from(wantedBlocks))
+          requireBlockAccess(ctx.user, block);
         const all = (await listContracts(true)).filter(contract =>
           canManageContract(ctx.user, contract)
         );
@@ -1910,12 +1921,14 @@ export const appRouter = router({
         for (const contract of all) {
           if (contract.status === "paused") continue;
           if (
-            input.blockFolder &&
-            deriveBlockFolder(
-              contract.propertyName,
-              contract.unitName,
-              contract.blockFolder
-            ) !== input.blockFolder
+            wantedBlocks.size &&
+            !wantedBlocks.has(
+              deriveBlockFolder(
+                contract.propertyName,
+                contract.unitName,
+                contract.blockFolder
+              )
+            )
           )
             continue;
           const result = calculateAccrual(
