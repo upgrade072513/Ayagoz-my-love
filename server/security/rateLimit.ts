@@ -159,7 +159,7 @@ export const RULES = {
   loginPerAccount: { name: "login-email", limit: 30, windowMs: 15 * 60_000 },
   loginPerIp: { name: "login-ip", limit: 100, windowMs: 15 * 60_000 },
   passwordChange: { name: "password-change", limit: 10, windowMs: 15 * 60_000 },
-  scanRecognition: { name: "ocr", limit: 30, windowMs: 10 * 60_000 },
+  scanRecognition: { name: "ocr", limit: 150, windowMs: 10 * 60_000 }, // batch upload: up to 20 files + retries
   spreadsheetParse: { name: "xlsx", limit: 40, windowMs: 10 * 60_000 },
   fileUpload: { name: "upload", limit: 120, windowMs: 10 * 60_000 },
   pdfRender: { name: "pdf", limit: 120, windowMs: 10 * 60_000 },

@@ -68,7 +68,7 @@ async function getWorker() {
   return workerPromise;
 }
 
-const MAX_QUEUED_JOBS = 4;
+const MAX_QUEUED_JOBS = 12; // recognition is serial; up to ~12 scans may wait (batch uploads from several users)
 let queuedJobs = 0;
 
 export class OcrBusyError extends Error {

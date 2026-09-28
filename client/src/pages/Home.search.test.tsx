@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   scanPreviewMutate: vi.fn(),
   scanPreviewResult: null as any,
   createFromScanMutate: vi.fn(),
+  createFromScanMutateAsync: vi.fn(async (input: any) => ({ id: 900, ...input.fields })),
   generateMutate: vi.fn(),
   generateMutateAsync: vi.fn(),
   moveToFolderMutate: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock("@/lib/trpc", () => {
       permanentDeleteEligible: { useQuery: () => ({ data: [] }) },
       permanentlyDelete: { useMutation },
       permanentlyDeleteMany: { useMutation },
-      createFromScan: { useMutation: () => ({ mutate: mocks.createFromScanMutate, mutateAsync: vi.fn(), isPending: false }) },
+      createFromScan: { useMutation: () => ({ mutate: mocks.createFromScanMutate, mutateAsync: mocks.createFromScanMutateAsync, isPending: false }) },
       previewImport: { useMutation },
       importRows: { useMutation },
       moveToFolder: { useMutation: () => ({ mutate: mocks.moveToFolderMutate, mutateAsync: vi.fn(), isPending: false }) },
@@ -199,6 +200,36 @@ describe("section search wiring", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(mocks.generateMutate).toHaveBeenCalledWith(expect.objectContaining({ blockFolders: ["Блок А1"] }));
     confirm.mockRestore();
+  });
+
+  const recognised = (number: string, tenant: string) => ({ contractNumber: number, contractDate: "2026-09-01", tenantName: tenant, tenantContact: null, tenantEmail: null, propertyName: "Block Z", unitName: "9", startDate: "2026-09-01", endDate: "2026-12-31", tariffType: "monthly", tariffAmount: 100, status: "active", confidence: 0.9, fieldConfidence: {}, warnings: [] });
+
+  it("cancel in the review does not mark the file as saved", async () => {
+    mocks.scanPreviewResult = recognised("Н-1", "Новый Жилец");
+    render(<Contracts />);
+    const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["%PDF-1.4"], "Н-1.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Отмена" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    await waitFor(() => expect(screen.getByText(/Распознано ·/)).toBeTruthy());
+    expect(screen.queryByText("Сохранён")).toBeNull();
+    expect(screen.getByRole("button", { name: "Проверить" })).toBeTruthy();
+    mocks.scanPreviewResult = null;
+  });
+
+  it("selects recognised files and saves them without review", async () => {
+    mocks.createFromScanMutateAsync.mockClear();
+    mocks.scanPreviewResult = recognised("Н-2", "Другой Жилец");
+    render(<Contracts />);
+    const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["%PDF-1.4 a"], "Н-2.pdf", { type: "application/pdf" }), new File(["%PDF-1.4 bb"], "Н-3.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => expect(screen.getAllByText(/Распознано ·/)).toHaveLength(2));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Выбрать все распознанные" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить выбранные (2)" }));
+    await waitFor(() => expect(mocks.createFromScanMutateAsync).toHaveBeenCalledTimes(2));
+    expect(mocks.createFromScanMutateAsync.mock.calls.every(([payload]: any[]) => payload.duplicateMode === "new")).toBe(true);
+    await waitFor(() => expect(screen.getAllByText("Сохранён")).toHaveLength(2));
+    mocks.scanPreviewResult = null;
   });
 
   it("offers Google Drive Picker next to computer upload", () => {
