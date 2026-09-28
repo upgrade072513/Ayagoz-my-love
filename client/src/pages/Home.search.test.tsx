@@ -228,7 +228,9 @@ describe("section search wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить выбранные (2)" }));
     await waitFor(() => expect(mocks.createFromScanMutateAsync).toHaveBeenCalledTimes(2));
     expect(mocks.createFromScanMutateAsync.mock.calls.every(([payload]: any[]) => payload.duplicateMode === "new")).toBe(true);
-    await waitFor(() => expect(screen.getAllByText("Сохранён")).toHaveLength(2));
+    // When every file is saved the batch card closes and a summary is shown.
+    await waitFor(() => expect(screen.getByText("Загрузка завершена: сохранено договоров — 2")).toBeTruthy());
+    expect(screen.queryByText("Сохранить выбранные (0)")).toBeNull();
     mocks.scanPreviewResult = null;
   });
 
