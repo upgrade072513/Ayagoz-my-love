@@ -1,0 +1,133 @@
+import { describe, expect, it } from "vitest";
+import { calculateAccrual, describeAccrualParts } from "@shared/accrual";
+import {
+  parseTariffSchedule,
+  validateTariffSchedule,
+} from "@shared/tariffSchedule";
+import { parseContractText } from "./localOcr";
+
+const contract = {
+  startDate: "2026-09-01",
+  endDate: "2027-06-30",
+  tariffType: "monthly" as const,
+  tariffAmount: 150000,
+  tariffSchedule: JSON.stringify([
+    { from: "2026-09-01", to: "2027-01-14", tariffType: "monthly", amount: 150000 },
+    { from: "2027-01-15", to: "2027-06-30", tariffType: "monthly", amount: 165000 },
+  ]),
+};
+
+describe("tariff that changes during the term", () => {
+  it("uses the first rate before the change and the second one after it", () => {
+    expect(calculateAccrual(contract, "2026-12")).toMatchObject({
+      amount: 150000,
+      tariffAmount: 150000,
+    });
+    expect(calculateAccrual(contract, "2027-03")).toMatchObject({
+      amount: 165000,
+      tariffAmount: 165000,
+      quantity: 1,
+    });
+  });
+
+  it("splits the month of the change by days", () => {
+    const result = calculateAccrual(contract, "2027-01")!;
+    // 14 days × 150 000/31 + 17 days × 165 000/31
+    expect(result.amount).toBeCloseTo(67741.94 + 90483.87, 2);
+    expect(result.parts).toHaveLength(2);
+    expect(result.tariffAmount).toBe(165000); // most days
+    expect(describeAccrualParts(result.parts)).toContain("01.01–14.01");
+  });
+
+  it("days outside the listed periods use the base rate", () => {
+    const partial = {
+      ...contract,
+      tariffSchedule: [
+        { from: "2027-02-01", to: "2027-06-30", tariffType: "monthly" as const, amount: 200000 },
+      ],
+    };
+    expect(calculateAccrual(partial, "2026-10")?.amount).toBe(150000);
+    expect(calculateAccrual(partial, "2027-02")?.amount).toBe(200000);
+  });
+
+  it("rejects overlapping periods and drops garbage", () => {
+    expect(
+      validateTariffSchedule([
+        { from: "2026-09-01", to: "2026-12-31", tariffType: "monthly", amount: 1 },
+        { from: "2026-12-01", to: "2027-01-31", tariffType: "monthly", amount: 2 },
+      ])
+    ).toHaveLength(1);
+    expect(parseTariffSchedule("not json")).toEqual([]);
+    expect(
+      parseTariffSchedule([{ from: "2026-13-01", to: "x", amount: 5 }, { from: "2026-09-01", to: "2026-09-30", amount: "125 000 ₸" }])
+    ).toEqual([{ from: "2026-09-01", to: "2026-09-30", tariffType: "monthly", amount: 125000 }]);
+  });
+});
+
+describe("built-in recognition of a changing rate", () => {
+  const cases: Array<[string, number[]]> = [
+    [
+      "Срок проживания: с 01.09.2026 по 30.06.2027. Стоимость услуг проживания в месяц: с 01.09.2026 по 31.12.2026 – 150 000 (сто пятьдесят тысяч) тенге; с 01.01.2027 по 30.06.2027 – 165 000 тенге. Общая стоимость 1 590 000 тенге.",
+      [150000, 165000],
+    ],
+    [
+      "Срок проживания с «1» сентября 2026 г. по «30» июня 2027 г. Плата составляет 120 000 тенге в месяц с 01.09.2026 по 31.12.2026, 130 000 тенге в месяц с 01.01.2027 по 30.06.2027.",
+      [120000, 130000],
+    ],
+    [
+      "Accommodation period from September 1, 2026 till June 30, 2027. Accommodation fee per month: from September 1, 2026 to December 31, 2026 - 150 000 KZT, from January 1, 2027 - 170 000 KZT.",
+      [150000, 170000],
+    ],
+    [
+      "Срок проживания с «1» сентября 2026 г. по «30» июня 2027 г. Стоимость в месяц: с 1 сентября 2026 г. по 31 декабря 2026 г. – 150 000 тенге, с 1 января 2027 г. по 30 июня 2027 г. – 160 000 тенге.",
+      [150000, 160000],
+    ],
+  ];
+  it.each(cases)("%s", (text, amounts) => {
+    const result = parseContractText(text);
+    expect(result.tariffSchedule.map(p => p.amount)).toEqual(amounts);
+    expect(result.tariffSchedule[0]).toMatchObject({ from: "2026-09-01", to: "2026-12-31" });
+    expect(result.tariffSchedule[1]).toMatchObject({ from: "2027-01-01", to: "2027-06-30" });
+    expect(result.tariffAmount).toBe(amounts[0]);
+    expect(result.warnings.join(" ")).toMatch(/Тариф меняется/);
+  });
+  it("one rate for the whole term gives no schedule", () => {
+    const result = parseContractText(
+      "Срок проживания: с 01.09.2026 по 30.06.2027. Стоимость услуг проживания в месяц: 150 000 тенге."
+    );
+    expect(result.tariffSchedule).toEqual([]);
+    expect(result.tariffAmount).toBe(150000);
+  });
+});
+
+describe("contract input", async () => {
+  const { contractInput } = await import("./routers");
+  const base = {
+    tenantName: "Иванов Иван",
+    propertyName: "Блок 38",
+    startDate: "2026-09-01",
+    endDate: "2027-06-30",
+    tariffType: "monthly" as const,
+    tariffAmount: 150000,
+  };
+  it("accepts a consistent schedule and rejects overlapping periods", () => {
+    expect(
+      contractInput.safeParse({
+        ...base,
+        tariffSchedule: [
+          { from: "2026-09-01", to: "2026-12-31", tariffType: "monthly", amount: 150000 },
+          { from: "2027-01-01", to: "2027-06-30", tariffType: "monthly", amount: 165000 },
+        ],
+      }).success
+    ).toBe(true);
+    expect(
+      contractInput.safeParse({
+        ...base,
+        tariffSchedule: [
+          { from: "2026-09-01", to: "2027-01-31", tariffType: "monthly", amount: 150000 },
+          { from: "2027-01-01", to: "2027-06-30", tariffType: "monthly", amount: 165000 },
+        ],
+      }).success
+    ).toBe(false);
+  });
+});

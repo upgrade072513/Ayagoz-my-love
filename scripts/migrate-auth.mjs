@@ -97,6 +97,14 @@ try {
       console.log("[migrate-auth] added unique index accruals(contractId, period)");
     }
   }
+  const [scheduleColumn] = await connection.query(
+    "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'contracts' AND COLUMN_NAME = 'tariffSchedule' LIMIT 1",
+    [db]
+  );
+  if (!scheduleColumn.length) {
+    await connection.query("ALTER TABLE `contracts` ADD `tariffSchedule` text NULL");
+    console.log("[migrate-auth] added contracts.tariffSchedule");
+  }
   // Expired sessions are useless; keep the table small.
   await connection.query("DELETE FROM `authSessions` WHERE `expiresAt` < NOW() - INTERVAL 30 DAY");
   await connection.query("DELETE FROM `rateLimits` WHERE `resetAtMs` < ?", [Date.now() - 24 * 3600 * 1000]);

@@ -159,6 +159,8 @@ export const contracts = mysqlTable("contracts", {
   terminationReason: text("terminationReason"),
   tariffType: mysqlEnum("tariffType", ["monthly", "daily"]).notNull(),
   tariffAmount: decimal("tariffAmount", { precision: 12, scale: 2 }).notNull(),
+  /** JSON list of rate changes within the term (see shared/tariffSchedule.ts); null = one rate. */
+  tariffSchedule: text("tariffSchedule"),
   status: mysqlEnum("status", ["active", "paused", "ended"])
     .default("active")
     .notNull(),

@@ -1,4 +1,10 @@
-export type TariffType = "monthly" | "daily";
+import {
+  parseTariffSchedule,
+  tariffOn,
+  type TariffPeriod,
+  type TariffType,
+} from "./tariffSchedule";
+export type { TariffType } from "./tariffSchedule";
 
 export type AccrualInput = {
   startDate: string;
@@ -6,6 +12,8 @@ export type AccrualInput = {
   terminationDate?: string | null;
   tariffType: TariffType;
   tariffAmount: number;
+  /** Rate changes within the term (JSON string from the DB or parsed list). */
+  tariffSchedule?: TariffPeriod[] | string | null;
 };
 
 export type CalculatedAccrual = {
@@ -13,6 +21,18 @@ export type CalculatedAccrual = {
   serviceTo: string;
   quantity: number;
   amount: number;
+  /** Rate that applies to most of the billed days (shown on the accrual line). */
+  tariffType: TariffType;
+  tariffAmount: number;
+  /** Several rates within this month: one part per rate. */
+  parts?: Array<{
+    from: string;
+    to: string;
+    days: number;
+    tariffType: TariffType;
+    tariffAmount: number;
+    amount: number;
+  }>;
 };
 
 const iso = (date: Date) => date.toISOString().slice(0, 10);
@@ -40,13 +60,58 @@ export function calculateAccrual(
   if (from > to) return null;
   const activeDays = Math.floor((to.getTime() - from.getTime()) / 86400000) + 1;
   const daysInMonth = periodEnd.getUTCDate();
-  const quantity =
-    input.tariffType === "daily"
-      ? activeDays
-      : round2(activeDays / daysInMonth);
+  const schedule = parseTariffSchedule(input.tariffSchedule, input.tariffType);
+  const base = { tariffType: input.tariffType, tariffAmount: input.tariffAmount };
+  // Split the billed days into runs with the same rate.
+  const parts: NonNullable<CalculatedAccrual["parts"]> = [];
+  for (let t = from.getTime(); t <= to.getTime(); t += 86400000) {
+    const day = iso(new Date(t));
+    const rate = schedule.length ? tariffOn(day, schedule, base) : base;
+    const last = parts[parts.length - 1];
+    if (
+      last &&
+      last.tariffType === rate.tariffType &&
+      last.tariffAmount === rate.tariffAmount
+    ) {
+      last.to = day;
+      last.days += 1;
+    } else
+      parts.push({ from: day, to: day, days: 1, ...rate, amount: 0 });
+  }
+  for (const part of parts)
+    part.amount =
+      part.tariffType === "daily"
+        ? round2(part.days * part.tariffAmount)
+        : round2((part.days / daysInMonth) * part.tariffAmount);
+  const main = parts.reduce((best, part) => (part.days > best.days ? part : best));
+  const allDaily = parts.every(part => part.tariffType === "daily");
+  const quantity = allDaily ? activeDays : round2(activeDays / daysInMonth);
   const amount =
-    input.tariffType === "daily"
-      ? round2(activeDays * input.tariffAmount)
-      : round2((activeDays / daysInMonth) * input.tariffAmount);
-  return { serviceFrom: iso(from), serviceTo: iso(to), quantity, amount };
+    parts.length === 1
+      ? parts[0].amount
+      : round2(parts.reduce((sum, part) => sum + part.amount, 0));
+  return {
+    serviceFrom: iso(from),
+    serviceTo: iso(to),
+    quantity,
+    amount,
+    tariffType: main.tariffType,
+    tariffAmount: main.tariffAmount,
+    ...(parts.length > 1 ? { parts } : {}),
+  };
+}
+
+/** Accrual note for a month with several rates: «01.01–14.01: 150 000 ₸/мес — 67 741,94 ₸; …». */
+export function describeAccrualParts(parts: CalculatedAccrual["parts"]) {
+  if (!parts || parts.length < 2) return null;
+  const d = (value: string) => value.slice(8, 10) + "." + value.slice(5, 7);
+  return (
+    "Смена тарифа в месяце: " +
+    parts
+      .map(
+        part =>
+          `${d(part.from)}–${d(part.to)}: ${part.tariffAmount.toLocaleString("ru-RU")} ₸/${part.tariffType === "daily" ? "сутки" : "мес"} — ${part.amount.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₸`
+      )
+      .join("; ")
+  );
 }

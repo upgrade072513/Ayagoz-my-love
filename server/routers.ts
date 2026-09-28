@@ -9,7 +9,11 @@ import {
   router,
 } from "./_core/trpc";
 import { storagePut } from "./storage";
-import { calculateAccrual } from "@shared/accrual";
+import { calculateAccrual, describeAccrualParts } from "@shared/accrual";
+import {
+  parseTariffSchedule,
+  validateTariffSchedule,
+} from "@shared/tariffSchedule";
 import {
   contracts,
   documents,
@@ -339,6 +343,16 @@ const ensureUniqueContractNumber = async (
   if (duplicate)
     throw new Error(`Договор с номером «${displayNumber}» уже существует`);
 };
+const TARIFF_NOTE_PREFIX = "Смена тарифа в месяце";
+/** Note on a month with two rates; a stale automatic note is cleared, a manager's own note is kept. */
+const tariffNote = (
+  parts: Parameters<typeof describeAccrualParts>[0],
+  current?: string | null
+): { notes?: string | null } => {
+  const note = describeAccrualParts(parts);
+  if (note) return { notes: note };
+  return current?.startsWith(TARIFF_NOTE_PREFIX) ? { notes: null } : {};
+};
 const recalculateDraftAccrualsForContract = async (contract: any) => {
   const rows = (await listAccruals()).filter(
     row =>
@@ -356,6 +370,7 @@ const recalculateDraftAccrualsForContract = async (contract: any) => {
           : null,
         tariffType: contract.tariffType,
         tariffAmount: Number(contract.tariffAmount),
+        tariffSchedule: contract.tariffSchedule,
       },
       row.period
     );
@@ -375,8 +390,9 @@ const recalculateDraftAccrualsForContract = async (contract: any) => {
       tenantNumber: contract.tenantNumber ?? null,
       propertyName: contract.propertyName,
       unitName: contract.unitName ?? null,
-      tariffType: contract.tariffType,
-      tariffAmount: String(contract.tariffAmount),
+      tariffType: result.tariffType,
+      tariffAmount: result.tariffAmount.toFixed(2),
+      ...tariffNote(result.parts, row.notes),
     }).catch(() => undefined);
   }
   return rows.length;
@@ -422,10 +438,19 @@ const standaloneAccrualInput = z
       });
   });
 
+const tariffPeriodSchema = z.object({
+  from: isoDate,
+  to: isoDate,
+  tariffType: z.enum(["monthly", "daily"]),
+  amount: money,
+});
 export const contractInput = z
   .object({
     contractNumber: z.string().trim().max(120).optional(),
-    contractDate: isoDate.optional(),
+    contractDate: z
+      .union([isoDate, z.literal("")])
+      .optional()
+      .transform(value => value || undefined),
     tenantName: z.string().trim().min(1).max(255),
     tenantContact: z.string().max(255).optional(),
     tenantEmail: optionalEmail,
@@ -443,6 +468,8 @@ export const contractInput = z
     blockFolder: z.string().trim().max(120).optional(),
     tariffType: z.enum(["monthly", "daily"]),
     tariffAmount: money,
+    /** Rate changes within the term; empty/omitted = one rate for the whole term. */
+    tariffSchedule: z.array(tariffPeriodSchema).max(24).optional(),
     status: z.enum(["active", "paused", "ended"]).default("active"),
     notes: z.string().max(LIMITS.longText).optional(),
   })
@@ -452,6 +479,12 @@ export const contractInput = z
         code: z.ZodIssueCode.custom,
         path: ["endDate"],
         message: "Дата начала не может быть позже даты окончания",
+      });
+    for (const message of validateTariffSchedule(value.tariffSchedule ?? [], value))
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tariffSchedule"],
+        message,
       });
     const today = new Date().toISOString().slice(0, 10);
     if (
@@ -528,6 +561,22 @@ const scanResultSchema = {
       description: "Только monthly или daily",
     },
     tariffAmount: { type: ["number", "null"], description: "Ставка в тенге" },
+    tariffSchedule: {
+      type: "array",
+      description:
+        "Периоды с разной ставкой, если тариф меняется в течение срока; иначе пустой массив",
+      items: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "YYYY-MM-DD" },
+          to: { type: "string", description: "YYYY-MM-DD" },
+          tariffType: { type: "string", enum: ["monthly", "daily"] },
+          amount: { type: "number" },
+        },
+        required: ["from", "to", "tariffType", "amount"],
+        additionalProperties: false,
+      },
+    },
     status: {
       type: ["string", "null"],
       enum: ["active", "paused", "ended", null],
@@ -557,6 +606,7 @@ const scanResultSchema = {
     "endDate",
     "tariffType",
     "tariffAmount",
+    "tariffSchedule",
     "status",
     "confidence",
     "fieldConfidence",
@@ -577,6 +627,16 @@ const scanResultValidator = z.object({
   endDate: z.string().nullable(),
   tariffType: z.enum(["monthly", "daily"]).nullable(),
   tariffAmount: z.number().nullable(),
+  tariffSchedule: z
+    .array(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        tariffType: z.enum(["monthly", "daily"]),
+        amount: z.number(),
+      })
+    )
+    .default([]),
   status: z.enum(["active", "paused", "ended"]).nullable(),
   confidence: z.number().min(0).max(1),
   fieldConfidence: z.record(z.string(), z.number().min(0).max(1)).default({}),
@@ -682,6 +742,22 @@ const SCAN_KEYS = [
   "tariffAmount",
   "status",
 ] as const;
+/** Clean rate periods from the model; one rate or an inconsistent list → []. */
+const normalizeScanSchedule = (out: any) => {
+  const list = parseTariffSchedule(
+    Array.isArray(out.tariffSchedule) ? out.tariffSchedule : [],
+    out.tariffType === "daily" ? "daily" : "monthly"
+  );
+  if (list.length < 2) return [];
+  if (new Set(list.map(p => `${p.tariffType}:${p.amount}`)).size < 2) return [];
+  if (validateTariffSchedule(list).length) return [];
+  // The first period's rate is the contract's base rate.
+  if (out.tariffAmount == null) out.tariffAmount = list[0].amount;
+  if (out.tariffType == null) out.tariffType = list[0].tariffType;
+  if (!out.startDate) out.startDate = list[0].from;
+  if (!out.endDate) out.endDate = list[list.length - 1].to;
+  return list;
+};
 /** Models sometimes omit keys, send numbers as strings or unknown enum values — normalise before strict validation. */
 const withScanDefaults = (value: any) => {
   const raw = value && typeof value === "object" ? value : {};
@@ -695,6 +771,7 @@ const withScanDefaults = (value: any) => {
     out.tariffAmount = Number.isFinite(n) && n > 0 ? n : null;
   }
   if (!["monthly", "daily"].includes(out.tariffType)) out.tariffType = null;
+  out.tariffSchedule = normalizeScanSchedule(out);
   if (!["active", "paused", "ended"].includes(out.status)) out.status = null;
   for (const key of SCAN_KEYS)
     if (
@@ -1502,6 +1579,9 @@ export const appRouter = router({
                 tariffType: input.fields.tariffType || target.tariffType,
                 tariffAmount:
                   input.fields.tariffAmount || Number(target.tariffAmount),
+                tariffSchedule: input.fields.tariffSchedule?.length
+                  ? input.fields.tariffSchedule
+                  : parseTariffSchedule(target.tariffSchedule),
                 status: input.fields.status || target.status,
                 notes: input.fields.notes || target.notes || undefined,
               }
@@ -1956,6 +2036,7 @@ export const appRouter = router({
                 : null,
               tariffType: contract.tariffType,
               tariffAmount: Number(contract.tariffAmount),
+              tariffSchedule: contract.tariffSchedule,
             },
             input.period
           );
@@ -1972,8 +2053,9 @@ export const appRouter = router({
             tenantNumber: contract.tenantNumber ?? null,
             propertyName: contract.propertyName,
             unitName: contract.unitName ?? null,
-            tariffType: contract.tariffType,
-            tariffAmount: String(contract.tariffAmount),
+            tariffType: result.tariffType,
+            tariffAmount: result.tariffAmount.toFixed(2),
+            ...tariffNote(result.parts, previous?.notes),
           };
           if (previous?.status === "invoiced") continue;
           try {

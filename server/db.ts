@@ -1,4 +1,9 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  parseTariffSchedule,
+  serializeTariffSchedule,
+  type TariffPeriod,
+} from "@shared/tariffSchedule";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   users,
@@ -130,19 +135,38 @@ export async function getContract(id: number) {
     .limit(1);
   return rows[0];
 }
-export async function createContract(input: typeof contracts.$inferInsert) {
+/** The schedule arrives as a list from the API; the column stores JSON (null = one rate). */
+function withStoredSchedule<T extends Record<string, any>>(
+  input: T
+): Omit<T, "tariffSchedule"> & { tariffSchedule?: string | null } {
+  if (!("tariffSchedule" in input) || input.tariffSchedule === undefined)
+    return input as any;
+  const value = input.tariffSchedule;
+  const list = typeof value === "string" ? parseTariffSchedule(value) : value;
+  return {
+    ...input,
+    tariffSchedule: serializeTariffSchedule(Array.isArray(list) ? list : null),
+  };
+}
+type ContractWrite = Omit<typeof contracts.$inferInsert, "tariffSchedule"> & {
+  tariffSchedule?: string | TariffPeriod[] | null;
+};
+export async function createContract(input: ContractWrite) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const result = await db.insert(contracts).values(input);
+  const result = await db.insert(contracts).values(withStoredSchedule(input));
   return getContract(Number(result[0].insertId));
 }
 export async function updateContract(
   id: number,
-  input: Partial<typeof contracts.$inferInsert>
+  input: Partial<ContractWrite>
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  await db.update(contracts).set(input).where(eq(contracts.id, id));
+  await db
+    .update(contracts)
+    .set(withStoredSchedule(input))
+    .where(eq(contracts.id, id));
   return getContract(id);
 }
 export async function deleteContract(id: number) {
@@ -340,8 +364,21 @@ export async function permanentlyDeleteContracts(ids: number[]) {
   let deletedAccruals = 0;
   let deletedDocuments = 0;
 
-  for (const id of ids) {
-    const result = await permanentlyDeleteContract(id);
+  const deletedIds: number[] = [];
+  const failed: Array<{ id: number; message: string }> = [];
+  for (const id of Array.from(new Set(ids))) {
+    let result: Awaited<ReturnType<typeof permanentlyDeleteContract>>;
+    try {
+      result = await permanentlyDeleteContract(id);
+    } catch (error) {
+      // One bad contract must not stop the rest; each deletion is its own transaction.
+      failed.push({
+        id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    deletedIds.push(id);
     deletedInvoices += result.deletedInvoices;
     deletedInvoiceItems += result.deletedInvoiceItems;
     deletedPayments += result.deletedPayments;
@@ -353,8 +390,9 @@ export async function permanentlyDeleteContracts(ids: number[]) {
 
   return {
     success: true,
-    ids,
-    deletedContracts: ids.length,
+    ids: deletedIds,
+    deletedContracts: deletedIds.length,
+    failed,
     deletedInvoices,
     deletedInvoiceItems,
     deletedPayments,

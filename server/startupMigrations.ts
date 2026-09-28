@@ -46,6 +46,13 @@ export async function runStartupMigrations(url = process.env.DATABASE_URL) {
         "CREATE TABLE IF NOT EXISTS `rateLimits` (`key` varchar(128) NOT NULL, `count` int NOT NULL DEFAULT 0, `resetAtMs` bigint NOT NULL, CONSTRAINT `rateLimits_key` PRIMARY KEY(`key`))"
       );
     });
+    await step("contracts.tariffSchedule column", async () => {
+      const [rows]: any = await c.query(
+        "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contracts' AND COLUMN_NAME = 'tariffSchedule' LIMIT 1"
+      );
+      if (!rows.length)
+        await c.query("ALTER TABLE `contracts` ADD `tariffSchedule` text NULL");
+    });
     // One-time owner-requested reset (28.09.2026): all accruals, invoices and payments.
     await step("one-time accruals reset", async () => {
       const [done]: any = await c.query(

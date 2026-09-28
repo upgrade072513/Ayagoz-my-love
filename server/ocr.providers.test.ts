@@ -135,6 +135,38 @@ describe("automatic scan recognition", () => {
     expect(result.warnings.join(" ")).toMatch(/Распознано ИИ/);
   });
 
+  it("reads a rate that changes during the term from the AI answer", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "a-key");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    const answer = {
+      ...reply,
+      tariffAmount: null,
+      tariffSchedule: [
+        { from: "2027-01-01", to: "2027-06-30", tariffType: "monthly", amount: "170 000" },
+        { from: "2026-09-01", to: "2026-12-31", tariffType: "monthly", amount: 162400 },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ content: [{ type: "text", text: JSON.stringify(answer) }] })
+          )
+      )
+    );
+    const result = await caller().contracts.previewScan({
+      dataUrl: pdf,
+      mimeType: "application/pdf",
+      fileName: "scan.pdf",
+    });
+    expect(result.tariffAmount).toBe(162400);
+    expect(result.tariffSchedule).toEqual([
+      { from: "2026-09-01", to: "2026-12-31", tariffType: "monthly", amount: 162400 },
+      { from: "2027-01-01", to: "2027-06-30", tariffType: "monthly", amount: 170000 },
+    ]);
+  });
+
   it("falls back to the file name with a clear warning when the service rejects the key", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("GEMINI_API_KEY", "bad");

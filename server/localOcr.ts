@@ -435,6 +435,131 @@ function findMoney(text: string) {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Rate that changes during the term: «с 01.09.2026 по 31.12.2026 — 150 000 тенге, с 01.01.2027 по 30.06.2027 — 165 000 тенге»
+// ---------------------------------------------------------------------------------------------
+type SchedulePart = {
+  from: string;
+  to: string | null;
+  tariffType: "monthly" | "daily";
+  amount: number;
+};
+const D_ANY = `(?:${DATE_NUM.source}|${DATE_WORD.source}|${DATE_EN.source})`;
+const RANGE_PATTERNS = [
+  new RegExp(
+    `(?<![\\p{L}\\d])(?:с|c|from|начиная\\s+с)\\s+(?<a>${D_ANY})\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s+(?<b>${D_ANY})`,
+    "giu"
+  ),
+  new RegExp(`(?<a>${DATE_NUM.source})\\s*-\\s*(?<b>${DATE_NUM.source})`, "giu"),
+  // open-ended: «с 01.01.2027 — 165 000 тенге»
+  new RegExp(
+    `(?<![\\p{L}\\d])(?:с|c|from|начиная\\s+с)\\s+(?<a>${D_ANY})(?!\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s)`,
+    "giu"
+  ),
+];
+const SCHEDULE_MONEY =
+  /(\d{1,3}(?:[  ]\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
+const moneyIn = (window: string) => {
+  const m = window.match(SCHEDULE_MONEY);
+  if (!m) return null;
+  const before = window.slice(0, m.index ?? 0);
+  if (/(общ\p{L}*|итого|всего|total|депозит|deposit|залог|штраф|пен[ия])/iu.test(before))
+    return null;
+  const amount =
+    Number(m[1].replace(/[  ]/g, "")) + (m[2] ? Number(m[2]) / 100 : 0);
+  return amount > 0 ? { amount, index: m.index ?? 0, length: m[0].length } : null;
+};
+const typeIn = (window: string, fallback: "monthly" | "daily") =>
+  /(сутк|суточ|за\s+день|в\s+день|per\s+day|daily|тәулік)/iu.test(window)
+    ? "daily"
+    : /(месяц|ежемесяч|monthly|per\s+month|айына)/iu.test(window)
+      ? "monthly"
+      : fallback;
+const dayBefore = (iso: string) =>
+  new Date(Date.parse(`${iso}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+export function findTariffSchedule(
+  flat: string,
+  fallbackType: "monthly" | "daily",
+  term: { startDate: string | null; endDate: string | null }
+): SchedulePart[] {
+  type Hit = { start: number; end: number; from: string; to: string | null };
+  const hits: Hit[] = [];
+  for (const pattern of RANGE_PATTERNS)
+    for (const m of flat.matchAll(pattern)) {
+      const start = m.index ?? 0;
+      const end = start + m[0].length;
+      if (hits.some(h => start < h.end && end > h.start)) continue; // already covered by a fuller pattern
+      const from = parseDate(m.groups?.a ?? "");
+      const to = m.groups?.b ? parseDate(m.groups.b) : null;
+      if (!from || (m.groups?.b && !to) || (to && to < from)) continue;
+      hits.push({ start, end, from, to });
+    }
+  hits.sort((a, b) => a.start - b.start);
+  const parts: Array<SchedulePart & { start: number }> = [];
+  hits.forEach((hit, i) => {
+    const next = hits[i + 1]?.start ?? flat.length;
+    const after = flat.slice(hit.end, Math.min(next, hit.end + 160));
+    let money = moneyIn(after);
+    let context = money ? after.slice(0, money.index + money.length + 40) : "";
+    // «… по 31.12.2026 – 150 000 тенге» belongs to this period; «… по 31.12.2026, 130 000 тенге …» starts the next one.
+    if (money && /^\s*(?:г\.|года|г(?!\.))?\s*[,;.]/u.test(after.slice(0, money.index)))
+      money = null;
+    if (!money) {
+      // «150 000 тенге в месяц с 01.09.2026 по 31.12.2026»
+      const prevEnd = i > 0 ? hits[i - 1].end : 0;
+      const before = flat.slice(Math.max(prevEnd, hit.start - 90), hit.start);
+      const all = Array.from(before.matchAll(new RegExp(SCHEDULE_MONEY.source, "giu")));
+      const last = all[all.length - 1];
+      const gap = last ? before.slice((last.index ?? 0) + last[0].length) : "";
+      if (last && /^[\p{L}\s/]{0,30}$/u.test(gap)) {
+        money = moneyIn(before.slice(last.index ?? 0));
+        context = before.slice(last.index ?? 0);
+      }
+    }
+    if (!money) return;
+    parts.push({
+      start: hit.start,
+      from: hit.from,
+      to: hit.to,
+      amount: money.amount,
+      tariffType: typeIn(context, fallbackType),
+    });
+  });
+  // The overall term line («Срок проживания: с … по …») contains the others — it is not a rate period.
+  let list = parts.filter(
+    p =>
+      !parts.some(
+        q =>
+          q !== p &&
+          p.to &&
+          q.from >= p.from &&
+          (q.to ?? q.from) <= p.to &&
+          (q.from !== p.from || q.to !== p.to)
+      )
+  );
+  // Same period mentioned twice (RU + EN halves of a bilingual form) — keep one.
+  list = list.filter(
+    (p, i) =>
+      list.findIndex(q => q.from === p.from && q.to === p.to && q.amount === p.amount) === i
+  );
+  list.sort((a, b) => a.from.localeCompare(b.from));
+  // Open-ended parts run until the next part starts or the term ends.
+  const result: SchedulePart[] = list.map((p, i) => ({
+    from: p.from,
+    to:
+      p.to ??
+      (list[i + 1] ? dayBefore(list[i + 1].from) : term.endDate ?? null),
+    tariffType: p.tariffType,
+    amount: p.amount,
+  }));
+  const valid = result.filter(p => p.to && p.to >= p.from);
+  const overlapping = valid.some((p, i) => i > 0 && p.from <= (valid[i - 1].to as string));
+  if (valid.length < 2 || overlapping) return [];
+  if (new Set(valid.map(p => `${p.tariffType}:${p.amount}`)).size < 2) return [];
+  return valid;
+}
+
 const MISSING_PREFIX = "Не удалось уверенно найти:";
 function missingFieldsWarning(
   values: Record<
@@ -593,8 +718,8 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
   fieldConfidence.endDate = endDate ? scale(periodMatch ? 0.85 : 0.45) : 0;
 
   const money = findMoney(text);
-  const tariffAmount = money.amount;
-  fieldConfidence.tariffAmount = tariffAmount ? scale(money.confidence) : 0;
+  let tariffAmountValue = money.amount;
+  fieldConfidence.tariffAmount = tariffAmountValue ? scale(money.confidence) : 0;
   const tariffZone = (money.tail || flat).toLowerCase();
   const tariffType = /(сутк|суточ|за\s+день|в\s+день|per\s+day|daily)/.test(
     tariffZone
@@ -612,6 +737,27 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
         money.tail && /(сутк|месяц|ежемесяч|день)/.test(tariffZone) ? 0.85 : 0.5
       )
     : 0;
+  let tariffTypeValue = tariffType;
+
+  // A rate that changes during the term overrides the single «Стоимость … N тенге».
+  const schedule = findTariffSchedule(stripPersonalIds(text).replace(/\s+/g, " "), (tariffType ?? "monthly") as "monthly" | "daily", { startDate, endDate });
+  let tariffSchedule: Array<{ from: string; to: string; tariffType: "monthly" | "daily"; amount: number }> = [];
+  if (schedule.length) {
+    tariffSchedule = schedule.map(p => ({ ...p, to: p.to as string }));
+    if (!startDate) startDate = tariffSchedule[0].from;
+    if (!endDate) endDate = tariffSchedule[tariffSchedule.length - 1].to;
+    const first =
+      tariffSchedule.find(p => startDate && p.from <= startDate && startDate <= p.to) ??
+      tariffSchedule[0];
+    tariffAmountValue = first.amount;
+    tariffTypeValue = first.tariffType;
+    fieldConfidence.tariffAmount = scale(0.75);
+    fieldConfidence.tariffType = scale(0.75);
+    fieldConfidence.tariffSchedule = scale(0.7);
+    warnings.push(
+      `Тариф меняется в течение срока (${tariffSchedule.length} периода) — проверьте периоды и суммы.`
+    );
+  }
 
   // Address and room
   // «по адресу: г. Астана, пр. Кабанбай батыра 53, Блок 38, комната № 510.» → address without the room part
@@ -666,7 +812,7 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     tenantName: tenant.value,
     startDate,
     endDate,
-    tariffAmount,
+    tariffAmount: tariffAmountValue,
   });
   if (missingText) warnings.push(missingText);
   if (ocrConfidence < 0.6)
@@ -684,8 +830,9 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     unitName,
     startDate,
     endDate,
-    tariffType: tariffType as "monthly" | "daily" | null,
-    tariffAmount,
+    tariffType: tariffTypeValue as "monthly" | "daily" | null,
+    tariffAmount: tariffAmountValue,
+    tariffSchedule,
     status: status as "active" | "ended",
     confidence,
     fieldConfidence,
