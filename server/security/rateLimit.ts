@@ -23,6 +23,18 @@ async function database() {
   }
 }
 
+let lastWarning = 0;
+/** One short line per minute at most (the full driver error is huge and repetitive). */
+function logUnavailable(error: unknown) {
+  if (Date.now() - lastWarning < 60_000) return;
+  lastWarning = Date.now();
+  const cause =
+    (error as any)?.cause?.message ?? (error as any)?.message ?? String(error);
+  console.error(
+    `[rate-limit] database counter unavailable, using memory: ${cause}`
+  );
+}
+
 function incrementInMemory(key: string, windowMs: number, now: number): Bucket {
   const current = memory.get(key);
   const next =
@@ -42,10 +54,7 @@ async function increment(
     return await incrementInDb(key, windowMs, now);
   } catch (error) {
     // A broken counter table must not take the feature down: fall back to this instance's memory.
-    console.error(
-      "[rate-limit] database counter unavailable, using memory:",
-      error
-    );
+    logUnavailable(error);
     return incrementInMemory(key, windowMs, now);
   }
 }
@@ -109,10 +118,7 @@ export async function peek(rule: RateRule, key: string) {
       if (row)
         bucket = { count: Number(row.count), resetAtMs: Number(row.resetAtMs) };
     } catch (error) {
-      console.error(
-        "[rate-limit] database counter unavailable, using memory:",
-        error
-      );
+      logUnavailable(error);
     }
   const active = bucket && bucket.resetAtMs > now ? bucket : undefined;
   return {

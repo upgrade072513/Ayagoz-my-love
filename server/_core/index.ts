@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { registerApi, safeErrorHandler } from "./app";
+import { runStartupMigrations } from "../startupMigrations";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -25,6 +26,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  await runStartupMigrations();
   const app = express();
   const server = createServer(app);
   registerApi(app);
