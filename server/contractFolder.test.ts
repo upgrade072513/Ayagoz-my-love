@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_FOLDER_OPTIONS, DEFAULT_BLOCK_FOLDER, deriveBlockFolder } from "@shared/contractFolder";
+import {
+  BLOCK_FOLDER_OPTIONS,
+  DEFAULT_BLOCK_FOLDER,
+  deriveBlockFolder,
+} from "@shared/contractFolder";
 
 describe("contract folders", () => {
   it("exposes the approved folder directory", () => {
@@ -33,7 +37,9 @@ describe("contract folders", () => {
   });
 
   it("keeps an explicit folder selection over automatic detection", () => {
-    expect(deriveBlockFolder("Хайвилл Астана", "39", "Блок А4")).toBe("Блок А4");
+    expect(deriveBlockFolder("Хайвилл Астана", "39", "Блок А4")).toBe(
+      "Блок А4"
+    );
     expect(deriveBlockFolder("", "")).toBe(DEFAULT_BLOCK_FOLDER);
   });
 });

@@ -16,14 +16,20 @@ describe("storage key security", () => {
 
   it("requires an authenticated user for storage access and blocks direct contract scans", () => {
     expect(isStorageAccessAllowed(null, "42/reports/report.pdf")).toBe(false);
-    expect(isStorageAccessAllowed({ id: 42 }, "42/reports/report.pdf")).toBe(true);
-    expect(isStorageAccessAllowed({ id: 42 }, "42/contracts/scan.pdf")).toBe(false);
+    expect(isStorageAccessAllowed({ id: 42 }, "42/reports/report.pdf")).toBe(
+      true
+    );
+    expect(isStorageAccessAllowed({ id: 42 }, "42/contracts/scan.pdf")).toBe(
+      false
+    );
   });
 
   it("hashes passwords and verifies only the matching password", async () => {
     const encoded = await hashPassword("correct horse battery staple");
     expect(encoded).toMatch(/^scrypt\$/);
-    expect(await verifyPassword("correct horse battery staple", encoded)).toBe(true);
+    expect(await verifyPassword("correct horse battery staple", encoded)).toBe(
+      true
+    );
     expect(await verifyPassword("wrong password", encoded)).toBe(false);
     expect(encoded).not.toContain("correct horse");
   });

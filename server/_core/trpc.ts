@@ -1,4 +1,4 @@
-import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
+import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
@@ -13,10 +13,17 @@ export const publicProcedure = t.procedure;
 // While an account still uses an administrator-issued one-time password, the only
 // authenticated action allowed is replacing it (auth.me / auth.logout are public).
 const PASSWORD_CHANGE_ALLOWED_PATHS = new Set(["auth.changePassword"]);
-const PASSWORD_CHANGE_REQUIRED_MSG = "Сначала замените временный пароль на собственный";
-const assertPasswordChanged = (user: { mustChangePassword?: boolean | null }, path: string) => {
+const PASSWORD_CHANGE_REQUIRED_MSG =
+  "Сначала замените временный пароль на собственный";
+const assertPasswordChanged = (
+  user: { mustChangePassword?: boolean | null },
+  path: string
+) => {
   if (user.mustChangePassword && !PASSWORD_CHANGE_ALLOWED_PATHS.has(path)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: PASSWORD_CHANGE_REQUIRED_MSG });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: PASSWORD_CHANGE_REQUIRED_MSG,
+    });
   }
 };
 
@@ -42,7 +49,12 @@ export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
-    if (!ctx.user || String(ctx.user.role ?? '').trim().toLowerCase() !== 'admin') {
+    if (
+      !ctx.user ||
+      String(ctx.user.role ?? "")
+        .trim()
+        .toLowerCase() !== "admin"
+    ) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
     assertPasswordChanged(ctx.user, opts.path);
@@ -53,5 +65,5 @@ export const adminProcedure = t.procedure.use(
         user: ctx.user,
       },
     });
-  }),
+  })
 );

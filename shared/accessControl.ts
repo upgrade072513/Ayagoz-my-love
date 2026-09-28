@@ -7,7 +7,8 @@ export const ROLE_LABELS: Record<AppRole, string> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
-  admin: "Полный доступ ко всем блокам, пользователям, отчётам и необратимым операциям",
+  admin:
+    "Полный доступ ко всем блокам, пользователям, отчётам и необратимым операциям",
   manager: "Загрузка и изменение договоров только в назначенных блоках",
 };
 
@@ -36,8 +37,13 @@ export function hasPermission(role: string, permission: Permission) {
   return (permissionRoles[permission] ?? []).includes(role as AppRole);
 }
 
-export function assertPermission(role: string, permission: Permission, message?: string): asserts role is AppRole {
-  if (!hasPermission(role, permission)) throw new Error(message ?? "Недостаточно прав для выполнения операции");
+export function assertPermission(
+  role: string,
+  permission: Permission,
+  message?: string
+): asserts role is AppRole {
+  if (!hasPermission(role, permission))
+    throw new Error(message ?? "Недостаточно прав для выполнения операции");
 }
 
 export const PERMISSION_LABELS: Record<Permission, string> = {

@@ -39,7 +39,10 @@ async function startServer() {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    res.setHeader(
+      "Permissions-Policy",
+      "camera=(), microphone=(), geolocation=()"
+    );
     next();
   });
   // Configure body parser with larger size limit for file uploads
@@ -48,7 +51,10 @@ async function startServer() {
   app.get("/healthz", (_req, res) => res.json({ ok: true }));
   registerStorageProxy(app);
   registerInvoicePdfRoute(app);
-  app.post("/api/scheduled/archive-expired-contracts", archiveExpiredContractsHandler);
+  app.post(
+    "/api/scheduled/archive-expired-contracts",
+    archiveExpiredContractsHandler
+  );
   // tRPC API
   app.use(
     "/api/trpc",

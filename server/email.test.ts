@@ -3,14 +3,16 @@ import { buildInvoiceEmail } from "./email";
 
 describe("invoice email", () => {
   it("calculates the fixed due date as the 10th of the selected month", () => {
-    expect(buildInvoiceEmail({
-      invoiceNumber: "INV-1",
-      tenantName: "Иван Иванов",
-      recipient: "ivan@example.com",
-      period: "2026-08",
-      totalAmount: "116000.00",
-      items: [],
-    }).dueDate).toBe("2026-08-10");
+    expect(
+      buildInvoiceEmail({
+        invoiceNumber: "INV-1",
+        tenantName: "Иван Иванов",
+        recipient: "ivan@example.com",
+        period: "2026-08",
+        totalAmount: "116000.00",
+        items: [],
+      }).dueDate
+    ).toBe("2026-08-10");
   });
 
   it("includes the payment options and invoice details in html and text", () => {
@@ -20,7 +22,12 @@ describe("invoice email", () => {
       recipient: "ivan@example.com",
       period: "2026-08",
       totalAmount: "116000.00",
-      items: [{ description: "Услуги проживания 2026-08-01 — 2026-08-31", amount: "116000.00" }],
+      items: [
+        {
+          description: "Услуги проживания 2026-08-01 — 2026-08-31",
+          amount: "116000.00",
+        },
+      ],
     });
 
     expect(email.subject).toContain("INV-1");

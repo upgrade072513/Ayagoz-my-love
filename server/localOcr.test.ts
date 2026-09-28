@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { identityFromFileName, mergeWithFileName, parseContractText } from "./localOcr";
+import {
+  identityFromFileName,
+  mergeWithFileName,
+  parseContractText,
+} from "./localOcr";
 
 describe("in-house contract text parser", () => {
   it("reads a typical NU accommodation contract", () => {
@@ -13,9 +17,17 @@ describe("in-house contract text parser", () => {
 Исполнитель: ЧУ «University Service Management», тел.: +7 (7172) 70-66-00, e-mail: usm@nu.edu.kz
 Проживающий: Асылбек Нұрқали Асылбекұлы, тел.: +7 747 241 53 62, E-mail: nurkali.assylbek@nu.edu.kz`;
     expect(parseContractText(text)).toMatchObject({
-      contractNumber: "0294-2026/08-23", contractDate: "2026-07-07", tenantName: "Асылбек Нұрқали Асылбекұлы",
-      tenantContact: "+77472415362", tenantEmail: "nurkali.assylbek@nu.edu.kz", propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 38",
-      unitName: "510", startDate: "2026-09-01", endDate: "2027-06-30", tariffType: "monthly", tariffAmount: 162400,
+      contractNumber: "0294-2026/08-23",
+      contractDate: "2026-07-07",
+      tenantName: "Асылбек Нұрқали Асылбекұлы",
+      tenantContact: "+77472415362",
+      tenantEmail: "nurkali.assylbek@nu.edu.kz",
+      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 38",
+      unitName: "510",
+      startDate: "2026-09-01",
+      endDate: "2027-06-30",
+      tariffType: "monthly",
+      tariffAmount: 162400,
     });
   });
 
@@ -27,8 +39,15 @@ describe("in-house contract text parser", () => {
 Плата составляет 6 960 тенге за сутки.
 Заказчик: Haixi Jiang, +7 (701) 555-12-34, haixi.jiang@nu.edu.kz`;
     expect(parseContractText(text)).toMatchObject({
-      contractNumber: "0554-2026/08-23", contractDate: "2026-09-04", tenantName: "Haixi Jiang", unitName: "1011",
-      startDate: "2026-09-01", endDate: "2026-09-19", tariffType: "daily", tariffAmount: 6960, tenantContact: "+77015551234",
+      contractNumber: "0554-2026/08-23",
+      contractDate: "2026-09-04",
+      tenantName: "Haixi Jiang",
+      unitName: "1011",
+      startDate: "2026-09-01",
+      endDate: "2026-09-19",
+      tariffType: "daily",
+      tariffAmount: 6960,
+      tenantContact: "+77015551234",
     });
   });
 
@@ -58,21 +77,56 @@ Entity transfered ond a Tenant accepted the Housing located at: Kabanbay Batyr �
 1) количество комнат / number of bedrooms: 1;`;
     const result = parseContractText(text, 0.7);
     expect(result).toMatchObject({
-      contractNumber: null, contractDate: null, tenantName: "Jane Ann Doe",
-      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44", unitName: "1003",
-      startDate: "2026-08-30", endDate: "2026-09-22", tariffType: "daily", tariffAmount: 7500,
+      contractNumber: null,
+      contractDate: null,
+      tenantName: "Jane Ann Doe",
+      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44",
+      unitName: "1003",
+      startDate: "2026-08-30",
+      endDate: "2026-09-22",
+      tariffType: "daily",
+      tariffAmount: 7500,
     });
-    const merged = mergeWithFileName(result, "0531-2026-08-23 от 31.08.2026г. Jane Ann Doe аренда 44 блок.PDF", true);
-    expect(merged).toMatchObject({ contractNumber: "0531-2026/08-23", contractDate: "2026-08-31", tenantName: "Jane Ann Doe" });
+    const merged = mergeWithFileName(
+      result,
+      "0531-2026-08-23 от 31.08.2026г. Jane Ann Doe аренда 44 блок.PDF",
+      true
+    );
+    expect(merged).toMatchObject({
+      contractNumber: "0531-2026/08-23",
+      contractDate: "2026-08-31",
+      tenantName: "Jane Ann Doe",
+    });
     expect(merged.warnings.join(" ")).not.toContain("Не удалось");
   });
 
   it("takes number, date, tenant and block from the file name", () => {
-    expect(identityFromFileName("0531-2026-08-23 от 31.08.2026г. Nancy Lee Stitt аренда 44 блок.PDF")).toEqual({ contractNumber: "0531-2026/08-23", contractDate: "2026-08-31", tenantName: "Nancy Lee Stitt", block: "44" });
-    expect(identityFromFileName("№ 0475-2026/08-23 от 01.09.2026.pdf")).toMatchObject({ contractNumber: "0475-2026/08-23", contractDate: "2026-09-01", tenantName: null });
+    expect(
+      identityFromFileName(
+        "0531-2026-08-23 от 31.08.2026г. Nancy Lee Stitt аренда 44 блок.PDF"
+      )
+    ).toEqual({
+      contractNumber: "0531-2026/08-23",
+      contractDate: "2026-08-31",
+      tenantName: "Nancy Lee Stitt",
+      block: "44",
+    });
+    expect(
+      identityFromFileName("№ 0475-2026/08-23 от 01.09.2026.pdf")
+    ).toMatchObject({
+      contractNumber: "0475-2026/08-23",
+      contractDate: "2026-09-01",
+      tenantName: null,
+    });
     // a text-layer PDF keeps its own exact number
-    const parsed = parseContractText("Договор № 0294-2026/08-23 от 07.07.2026", 0.98);
-    expect(mergeWithFileName(parsed, "0294-2026-08-23 от 07.07.2026.pdf", false).contractNumber).toBe("0294-2026/08-23");
+    const parsed = parseContractText(
+      "Договор № 0294-2026/08-23 от 07.07.2026",
+      0.98
+    );
+    expect(
+      mergeWithFileName(parsed, "0294-2026-08-23 от 07.07.2026.pdf", false)
+        .contractNumber
+    ).toBe("0294-2026/08-23");
   });
 
   it("reads the English accession statement and keeps the full name from the scan", () => {
@@ -89,9 +143,22 @@ Stul obedenny SD-3 | USM018229   11       2495799)   24957,99
 anda Tenant accepted the Housing located at: Kabanbay Batyr Ave. 53, Block 44, apt. 1004 Astana.`;
     const result = parseContractText(text, 0.7);
     expect(result).toMatchObject({
-      tenantName: "John Peter Smith", propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44", unitName: "1004",
-      startDate: "2026-01-01", endDate: "2026-12-30", tariffType: "monthly", tariffAmount: 127600, tenantContact: null, contractDate: null,
+      tenantName: "John Peter Smith",
+      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 44",
+      unitName: "1004",
+      startDate: "2026-01-01",
+      endDate: "2026-12-30",
+      tariffType: "monthly",
+      tariffAmount: 127600,
+      tenantContact: null,
+      contractDate: null,
     });
-    expect(mergeWithFileName(result, "072-2026-08-23 от 28.01.2026г. John Smith аренда 44 блока.pdf", true).tenantName).toBe("John Peter Smith");
+    expect(
+      mergeWithFileName(
+        result,
+        "072-2026-08-23 от 28.01.2026г. John Smith аренда 44 блока.pdf",
+        true
+      ).tenantName
+    ).toBe("John Peter Smith");
   });
 });

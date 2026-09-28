@@ -10,9 +10,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./db", () => mocks);
 
-import { authenticateLocalRequest, hashPassword, normalizeEmail, recordFailedLogin, assertLoginRateLimit, verifyPassword } from "./localAuth";
+import {
+  authenticateLocalRequest,
+  hashPassword,
+  normalizeEmail,
+  recordFailedLogin,
+  assertLoginRateLimit,
+  verifyPassword,
+} from "./localAuth";
 
-const request = (cookie = "") => ({ headers: { cookie }, ip: "127.0.0.1" }) as any;
+const request = (cookie = "") =>
+  ({ headers: { cookie }, ip: "127.0.0.1" }) as any;
 
 describe("local authentication security", () => {
   it("normalizes email consistently", () => {
@@ -23,17 +31,46 @@ describe("local authentication security", () => {
     const first = await hashPassword("correct horse battery staple");
     const second = await hashPassword("correct horse battery staple");
     expect(first).not.toBe(second);
-    expect(await verifyPassword("correct horse battery staple", first)).toBe(true);
+    expect(await verifyPassword("correct horse battery staple", first)).toBe(
+      true
+    );
     expect(await verifyPassword("wrong password", first)).toBe(false);
   });
 
   it("rejects expired, revoked and non-active sessions", async () => {
-    mocks.getAuthSessionUser.mockResolvedValueOnce({ session: { id: 1, expiresAt: new Date(Date.now() - 1000), revokedAt: null }, user: { accountStatus: "active" } });
-    expect(await authenticateLocalRequest(request("app_session_id=expired"))).toBeNull();
-    mocks.getAuthSessionUser.mockResolvedValueOnce({ session: { id: 2, expiresAt: new Date(Date.now() + 60_000), revokedAt: new Date() }, user: { accountStatus: "active" } });
-    expect(await authenticateLocalRequest(request("app_session_id=revoked"))).toBeNull();
-    mocks.getAuthSessionUser.mockResolvedValueOnce({ session: { id: 3, expiresAt: new Date(Date.now() + 60_000), revokedAt: null }, user: { accountStatus: "pending" } });
-    expect(await authenticateLocalRequest(request("app_session_id=pending"))).toBeNull();
+    mocks.getAuthSessionUser.mockResolvedValueOnce({
+      session: {
+        id: 1,
+        expiresAt: new Date(Date.now() - 1000),
+        revokedAt: null,
+      },
+      user: { accountStatus: "active" },
+    });
+    expect(
+      await authenticateLocalRequest(request("app_session_id=expired"))
+    ).toBeNull();
+    mocks.getAuthSessionUser.mockResolvedValueOnce({
+      session: {
+        id: 2,
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: new Date(),
+      },
+      user: { accountStatus: "active" },
+    });
+    expect(
+      await authenticateLocalRequest(request("app_session_id=revoked"))
+    ).toBeNull();
+    mocks.getAuthSessionUser.mockResolvedValueOnce({
+      session: {
+        id: 3,
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: null,
+      },
+      user: { accountStatus: "pending" },
+    });
+    expect(
+      await authenticateLocalRequest(request("app_session_id=pending"))
+    ).toBeNull();
   });
 
   it("applies a bounded login rate limit with a neutral error", () => {
@@ -43,6 +80,8 @@ describe("local authentication security", () => {
       assertLoginRateLimit(req, email);
       recordFailedLogin(req, email);
     }
-    expect(() => assertLoginRateLimit(req, email)).toThrow("Неверный Email или пароль");
+    expect(() => assertLoginRateLimit(req, email)).toThrow(
+      "Неверный Email или пароль"
+    );
   });
 });

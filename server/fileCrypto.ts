@@ -1,9 +1,17 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 
 export const CONTRACT_FILE_ENCRYPTION_VERSION = 1;
 
 function getEncryptionKey() {
-  const rawKey = process.env.FILE_ENCRYPTION_KEY ?? process.env.CONTRACT_FILE_ENCRYPTION_KEY ?? "";
+  const rawKey =
+    process.env.FILE_ENCRYPTION_KEY ??
+    process.env.CONTRACT_FILE_ENCRYPTION_KEY ??
+    "";
   if (!rawKey) throw new Error("Server encryption key is not configured");
   return createHash("sha256").update(rawKey, "utf8").digest();
 }
@@ -27,9 +35,17 @@ export function encryptContractFile(data: Buffer): EncryptedFile {
   };
 }
 
-export function decryptContractFile(data: Buffer, metadata: { version: number; iv: string; authTag: string }): Buffer {
-  if (metadata.version !== CONTRACT_FILE_ENCRYPTION_VERSION) throw new Error("Unsupported contract file encryption version");
-  const decipher = createDecipheriv("aes-256-gcm", getEncryptionKey(), Buffer.from(metadata.iv, "hex"));
+export function decryptContractFile(
+  data: Buffer,
+  metadata: { version: number; iv: string; authTag: string }
+): Buffer {
+  if (metadata.version !== CONTRACT_FILE_ENCRYPTION_VERSION)
+    throw new Error("Unsupported contract file encryption version");
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    getEncryptionKey(),
+    Buffer.from(metadata.iv, "hex")
+  );
   decipher.setAuthTag(Buffer.from(metadata.authTag, "hex"));
   return Buffer.concat([decipher.update(data), decipher.final()]);
 }

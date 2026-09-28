@@ -6,11 +6,16 @@ type LifecycleContract = {
   archivedAt?: unknown | null;
 };
 
-export function getContractEffectiveEndDate(contract: LifecycleContract): string {
+export function getContractEffectiveEndDate(
+  contract: LifecycleContract
+): string {
   return toDateOnly(contract.terminationDate ?? contract.endDate);
 }
 
-export function shouldAutoArchiveContract(contract: LifecycleContract, today: string): boolean {
+export function shouldAutoArchiveContract(
+  contract: LifecycleContract,
+  today: string
+): boolean {
   if (contract.archivedAt) return false;
   return getContractEffectiveEndDate(contract) <= today;
 }

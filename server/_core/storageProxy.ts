@@ -4,7 +4,12 @@ import { authenticateLocalRequest } from "../localAuth";
 import { diskPath, isDiskStorage } from "../storage";
 
 export function isSafeStorageKey(key: string) {
-  return Boolean(key) && !key.includes("..") && !key.includes("\\") && !key.startsWith("/");
+  return (
+    Boolean(key) &&
+    !key.includes("..") &&
+    !key.includes("\\") &&
+    !key.startsWith("/")
+  );
 }
 
 export function isStorageAccessAllowed(user: unknown, key: string) {
@@ -57,7 +62,13 @@ export function registerStorageProxy(app: Express) {
     try {
       const user = await authenticateLocalRequest(req);
       if (!isStorageAccessAllowed(user, key)) {
-        res.status(key.split("/").includes("contracts") ? 403 : 401).send(key.split("/").includes("contracts") ? "Protected document download required" : "Unauthorized");
+        res
+          .status(key.split("/").includes("contracts") ? 403 : 401)
+          .send(
+            key.split("/").includes("contracts")
+              ? "Protected document download required"
+              : "Unauthorized"
+          );
         return;
       }
     } catch {
@@ -73,7 +84,7 @@ export function registerStorageProxy(app: Express) {
     try {
       const forgeUrl = new URL(
         "v1/storage/presign/get",
-        ENV.forgeApiUrl.replace(/\/+$/, "") + "/",
+        ENV.forgeApiUrl.replace(/\/+$/, "") + "/"
       );
       forgeUrl.searchParams.set("path", key);
 
@@ -83,7 +94,9 @@ export function registerStorageProxy(app: Express) {
 
       if (!forgeResp.ok) {
         const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
+        console.error(
+          `[StorageProxy] forge error: ${forgeResp.status} ${body}`
+        );
         res.status(502).send("Storage backend error");
         return;
       }

@@ -8,6 +8,8 @@ describe("toDateOnly", () => {
 
   it("keeps ISO date strings and rejects invalid values", () => {
     expect(toDateOnly("2026-08-31")).toBe("2026-08-31");
-    expect(() => toDateOnly("not-a-date")).toThrow("Некорректная дата договора");
+    expect(() => toDateOnly("not-a-date")).toThrow(
+      "Некорректная дата договора"
+    );
   });
 });

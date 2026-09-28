@@ -11,7 +11,12 @@ export const DISK_URL_PREFIX = "/files/";
 const LEGACY_URL_PREFIX = "/manus-storage/";
 
 // On Railway an attached volume is used automatically (RAILWAY_VOLUME_MOUNT_PATH).
-export const storageDir = () => (process.env.STORAGE_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || "").trim();
+export const storageDir = () =>
+  (
+    process.env.STORAGE_DIR ||
+    process.env.RAILWAY_VOLUME_MOUNT_PATH ||
+    ""
+  ).trim();
 export const isDiskStorage = () => Boolean(storageDir());
 
 function normalizeKey(relKey: string): string {
@@ -29,7 +34,8 @@ function appendHashSuffix(relKey: string): string {
 export function diskPath(key: string) {
   const root = path.resolve(storageDir());
   const full = path.resolve(root, normalizeKey(key));
-  if (full !== root && !full.startsWith(root + path.sep)) throw new Error("Invalid storage key");
+  if (full !== root && !full.startsWith(root + path.sep))
+    throw new Error("Invalid storage key");
   return full;
 }
 
@@ -37,7 +43,9 @@ function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
   const forgeKey = ENV.forgeApiKey;
   if (!forgeUrl || !forgeKey) {
-    throw new Error("Хранилище файлов не настроено: подключите Volume в Railway (или задайте STORAGE_DIR)");
+    throw new Error(
+      "Хранилище файлов не настроено: подключите Volume в Railway (или задайте STORAGE_DIR)"
+    );
   }
   return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
 }
@@ -46,7 +54,9 @@ async function forgePresign(kind: "get" | "put", key: string) {
   const { forgeUrl, forgeKey } = getForgeConfig();
   const url = new URL(`v1/storage/presign/${kind}`, forgeUrl + "/");
   url.searchParams.set("path", key);
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${forgeKey}` } });
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${forgeKey}` },
+  });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => resp.statusText);
     throw new Error(`Storage presign failed (${resp.status}): ${msg}`);
@@ -59,10 +69,11 @@ async function forgePresign(kind: "get" | "put", key: string) {
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream",
+  contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
   const key = appendHashSuffix(normalizeKey(relKey));
-  const bytes = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
+  const bytes =
+    typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
 
   if (isDiskStorage()) {
     const file = diskPath(key);
@@ -76,13 +87,19 @@ export async function storagePut(
     headers: { "Content-Type": contentType },
     body: new Blob([bytes], { type: contentType }),
   });
-  if (!uploadResp.ok) throw new Error(`Storage upload failed (${uploadResp.status})`);
+  if (!uploadResp.ok)
+    throw new Error(`Storage upload failed (${uploadResp.status})`);
   return { key, url: `${LEGACY_URL_PREFIX}${key}` };
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+export async function storageGet(
+  relKey: string
+): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
-  return { key, url: `${isDiskStorage() ? DISK_URL_PREFIX : LEGACY_URL_PREFIX}${key}` };
+  return {
+    key,
+    url: `${isDiskStorage() ? DISK_URL_PREFIX : LEGACY_URL_PREFIX}${key}`,
+  };
 }
 
 /** Reads the stored bytes of a file. */
