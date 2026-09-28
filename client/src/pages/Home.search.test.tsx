@@ -31,7 +31,7 @@ vi.mock("@/lib/trpc", () => {
       previewImport: { useMutation },
       importRows: { useMutation },
       moveToFolder: { useMutation: () => ({ mutate: mocks.moveToFolderMutate, mutateAsync: vi.fn(), isPending: false }) },
-      previewScan: { useMutation: () => ({ mutate: mocks.scanPreviewMutate, mutateAsync: vi.fn(), isPending: false }) },
+      previewScan: { useMutation: () => ({ mutate: mocks.scanPreviewMutate, mutateAsync: (input: unknown) => { mocks.scanPreviewMutate(input); return new Promise(() => undefined); }, isPending: false }) },
     },
     contractFolders: {
       list: { useQuery: () => ({ data: [{ id: 1, name: "Блок А1" }, { id: 2, name: "Блок А2" }] }) },
@@ -156,8 +156,9 @@ describe("section search wiring", () => {
     render(<Contracts />);
     const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(["a"], "Д-101 от 01.09.2026.pdf", { type: "application/pdf" }), new File(["b"], "Д-102 от 02.09.2026.pdf", { type: "application/pdf" })] } });
-    expect(screen.getByText("Прогресс файлов: 0/2 сохранено")).toBeTruthy();
-    expect(screen.getAllByText("Ожидает проверки")).toHaveLength(2);
+    // Files are recognised automatically right after selection.
+    expect(screen.getByText("Распознавание 2 файлов")).toBeTruthy();
+    expect(screen.getAllByText("Распознаётся…")).toHaveLength(2);
     fireEvent.click(screen.getAllByRole("button", { name: "Убрать" })[0]);
     expect(screen.queryByText("Д-101 от 01.09.2026.pdf")).toBeNull();
   });

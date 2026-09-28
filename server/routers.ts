@@ -435,10 +435,10 @@ export const contractInput = z
     unitName: z.string().max(120).optional(),
     startDate: isoDate,
     endDate: isoDate,
-    terminationDate: z.preprocess(
-      value => (value === "" ? undefined : value),
-      isoDate.optional()
-    ),
+    terminationDate: z
+      .union([isoDate, z.literal("")])
+      .optional()
+      .transform(value => value || undefined),
     terminationReason: z.string().trim().max(2000).optional(),
     blockFolder: z.string().trim().max(120).optional(),
     tariffType: z.enum(["monthly", "daily"]),
