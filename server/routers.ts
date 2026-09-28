@@ -1426,6 +1426,24 @@ export const appRouter = router({
         )
           throw new Error("Договор для операции с дубликатом не найден");
         if (target) requireContractAccess(ctx.user, target);
+        // Different contract numbers = different contracts (one resident can have several):
+        // never let "merge"/"overwrite" replace another contract by mistake.
+        const incomingNumber = input.fields.contractNumber
+          ?.trim()
+          .toLocaleLowerCase();
+        const targetNumber = target?.contractNumber?.trim().toLocaleLowerCase();
+        if (
+          target &&
+          (input.duplicateMode === "overwrite" ||
+            input.duplicateMode === "merge") &&
+          incomingNumber &&
+          targetNumber &&
+          incomingNumber !== targetNumber
+        )
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Это другой договор (№ ${input.fields.contractNumber?.trim()}, а найден № ${target.contractNumber?.trim()}). Сохраните его как новый договор.`,
+          });
         const fields =
           input.duplicateMode === "merge" && target
             ? {
@@ -1695,7 +1713,9 @@ export const appRouter = router({
         const seenNumbers = new Set<string>();
         for (const { row, blockFolder } of prepared) {
           requireBlockAccess(ctx.user, blockFolder);
-          const normalizedNumber = row.contractNumber?.trim().toLocaleLowerCase();
+          const normalizedNumber = row.contractNumber
+            ?.trim()
+            .toLocaleLowerCase();
           if (normalizedNumber) {
             if (seenNumbers.has(normalizedNumber))
               throw new Error(

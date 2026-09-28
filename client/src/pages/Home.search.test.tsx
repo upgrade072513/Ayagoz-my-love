@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   accruals: [] as any[],
   invoices: [] as any[],
   scanPreviewMutate: vi.fn(),
+  scanPreviewResult: null as any,
+  createFromScanMutate: vi.fn(),
   moveToFolderMutate: vi.fn(),
   documents: [] as any[],
   documentDownloadData: undefined as any,
@@ -27,11 +29,11 @@ vi.mock("@/lib/trpc", () => {
       permanentDeleteEligible: { useQuery: () => ({ data: [] }) },
       permanentlyDelete: { useMutation },
       permanentlyDeleteMany: { useMutation },
-      createFromScan: { useMutation },
+      createFromScan: { useMutation: () => ({ mutate: mocks.createFromScanMutate, mutateAsync: vi.fn(), isPending: false }) },
       previewImport: { useMutation },
       importRows: { useMutation },
       moveToFolder: { useMutation: () => ({ mutate: mocks.moveToFolderMutate, mutateAsync: vi.fn(), isPending: false }) },
-      previewScan: { useMutation: () => ({ mutate: mocks.scanPreviewMutate, mutateAsync: (input: unknown) => { mocks.scanPreviewMutate(input); return new Promise(() => undefined); }, isPending: false }) },
+      previewScan: { useMutation: () => ({ mutate: mocks.scanPreviewMutate, mutateAsync: (input: unknown) => { mocks.scanPreviewMutate(input); return mocks.scanPreviewResult ? Promise.resolve(mocks.scanPreviewResult) : new Promise(() => undefined); }, isPending: false }) },
     },
     contractFolders: {
       list: { useQuery: () => ({ data: [{ id: 1, name: "Блок А1" }, { id: 2, name: "Блок А2" }] }) },
@@ -73,7 +75,7 @@ vi.mock("@/lib/trpc", () => {
   };
 });
 
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 
 import { Accruals, ContractForm, Contracts, Invoices, TENANT_CATEGORY_OPTIONS, buildQuickSearchSuggestions, calculateAccrualAmountByPeriod, getScanMimeType, isSupportedScanFile, splitImportRows } from "./Home";
 
@@ -161,6 +163,23 @@ describe("section search wiring", () => {
     expect(screen.getAllByText("Распознаётся…")).toHaveLength(2);
     fireEvent.click(screen.getAllByRole("button", { name: "Убрать" })[0]);
     expect(screen.queryByText("Д-101 от 01.09.2026.pdf")).toBeNull();
+  });
+
+  it("saves a second contract of the same resident as a NEW contract (does not touch the existing one)", async () => {
+    mocks.scanPreviewResult = { contractNumber: "Д-777", contractDate: "2026-09-01", tenantName: "Анна", tenantContact: null, tenantEmail: "anna@example.com", propertyName: "Block A", unitName: "101", startDate: "2026-09-01", endDate: "2026-12-31", tariffType: "monthly", tariffAmount: 100, status: "active", confidence: 0.95, fieldConfidence: {}, warnings: [] };
+    render(<Contracts />);
+    const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["%PDF-1.4"], "Д-777 от 01.09.2026.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => expect(screen.getByText("Как сохранить этот договор?")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Объединить с найденным" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить как новый договор" }));
+    expect(screen.getByText(/сохранить как отдельный новый договор/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Подтвердить и сохранить/ }));
+    await waitFor(() => expect(mocks.createFromScanMutate).toHaveBeenCalled());
+    const payload = mocks.createFromScanMutate.mock.calls[0][0];
+    expect(payload.duplicateMode).toBe("new");
+    expect(payload.duplicateContractId).toBeUndefined();
+    mocks.scanPreviewResult = null;
   });
 
   it("offers Google Drive Picker next to computer upload", () => {

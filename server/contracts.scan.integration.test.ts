@@ -167,6 +167,36 @@ describe("contracts scan OCR", () => {
     });
   });
 
+  it("refuses to overwrite a different contract of the same resident", async () => {
+    const db = await import("./db");
+    (db.getContract as any).mockResolvedValueOnce({
+      id: 5,
+      contractNumber: "0100-2026/08-23",
+      tenantName: "ТОО Альфа",
+      blockFolder: "Блок А1",
+    });
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.contracts.createFromScan({
+        fileName: "second.png",
+        mimeType: "image/png",
+        dataUrl,
+        duplicateMode: "overwrite",
+        duplicateContractId: 5,
+        fields: {
+          contractNumber: "0200-2026/08-23",
+          tenantName: "ТОО Альфа",
+          propertyName: "Объект OCR",
+          startDate: "2026-07-10",
+          endDate: "2026-07-12",
+          tariffType: "daily",
+          tariffAmount: 5000,
+          status: "ended",
+        },
+      })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
   it("rejects a file whose content does not match the declared type", async () => {
     const caller = appRouter.createCaller(ctx);
     await expect(
