@@ -56,6 +56,7 @@ vi.mock("@/lib/trpc", () => {
       updateFromPreview: { useMutation },
       createStandalone: { useMutation },
       importStandalone: { useMutation },
+      readImportFile: { useMutation },
     },
     invoices: {
       list: { useQuery: () => ({ data: mocks.invoices }) },

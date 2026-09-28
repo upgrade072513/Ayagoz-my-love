@@ -4,6 +4,14 @@ const mocks = vi.hoisted(() => ({
   listInvoices: vi.fn(),
   findPaymentByReference: vi.fn(),
   recordPayment: vi.fn(),
+  // INV-1 bills accrual 5 of contract 3 in "Блок А1".
+  listAllInvoiceItems: vi.fn(async () => [
+    { id: 1, invoiceId: 1, accrualId: 5 },
+  ]),
+  listAccrualsByIds: vi.fn(async () => [
+    { id: 5, contractId: 3, status: "invoiced" },
+  ]),
+  listContracts: vi.fn(async () => [{ id: 3, blockFolder: "Блок А1" }]),
 }));
 
 vi.mock("./db", () => ({
@@ -20,7 +28,9 @@ vi.mock("./db", () => ({
   getInvoice: vi.fn(),
   getInvoiceItems: vi.fn(),
   listAccruals: vi.fn(async () => []),
-  listContracts: vi.fn(async () => []),
+  listContracts: mocks.listContracts,
+  listAllInvoiceItems: mocks.listAllInvoiceItems,
+  listAccrualsByIds: mocks.listAccrualsByIds,
   listDocuments: vi.fn(async () => []),
   listPayments: vi.fn(async () => []),
   listPaymentAudit: vi.fn(async () => []),
@@ -58,7 +68,8 @@ const row = (overrides: Record<string, unknown> = {}) => ({
 
 describe("reconciliation import procedure", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mocks.findPaymentByReference.mockReset();
+    mocks.recordPayment.mockReset();
     mocks.listInvoices.mockResolvedValue([{ id: 1, invoiceNumber: "INV-1" }]);
     mocks.findPaymentByReference.mockResolvedValue(undefined);
     mocks.recordPayment.mockResolvedValue({
@@ -73,6 +84,7 @@ describe("reconciliation import procedure", () => {
       id: 3,
       role: "manager",
       departmentId: 1,
+      managedBlocks: JSON.stringify(["Блок А1"]),
     }).invoices.importPayments({
       rows: [row(), row({ invoiceNumber: "UNKNOWN" })],
     });

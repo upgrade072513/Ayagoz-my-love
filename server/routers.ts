@@ -40,6 +40,7 @@ import {
   moveContractsToFolder,
   markAccrualsInvoiced,
   updateAccrual,
+  updateDraftAccrual,
   updateContract,
   updateInvoiceEmail,
   permanentlyDeleteContract,
@@ -54,7 +55,20 @@ import { parsePaymentsExcel } from "./paymentImport";
 import { buildAccrualWorkbook } from "./excelExport";
 import { toDateOnly } from "@shared/dateOnly";
 import { canAccessContractBlock, canViewDocument } from "@shared/access";
-import { assertPermission } from "@shared/accessControl";
+import { hasPermission, type Permission } from "@shared/accessControl";
+
+/** Role check that yields a proper 403 (FORBIDDEN) instead of a generic server error. */
+function assertPermission(
+  role: string,
+  permission: Permission,
+  message?: string
+) {
+  if (!hasPermission(role, permission))
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: message ?? "Недостаточно прав для выполнения операции",
+    });
+}
 import { deriveBlockFolder } from "@shared/contractFolder";
 import { invokeLLM, listLLMModels } from "./_core/llm";
 import { getOcrProvider, OCR_FIELDS_PROMPT } from "./ocr";
@@ -64,7 +78,39 @@ import {
   recognizeLocally,
 } from "./localOcr";
 import { buildInvoiceEmail } from "./email";
-import { createHash } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
+import { TRPCError } from "@trpc/server";
+import {
+  type Actor,
+  canAccessContract,
+  canAccessBlock,
+  filterAccruals,
+  filterInvoices,
+  loadScope,
+  requireAccrualAccess,
+  requireBlock,
+  requireContractAccess as requireContractById,
+  requireDocumentAccess,
+  requireInvoiceAccess,
+  requirePaymentAccess,
+} from "./authz";
+import { LIMITS } from "./security/limits";
+import {
+  MIME_BY_KIND,
+  cleanDisplayFileName,
+  decodeScanUpload,
+  decodeSpreadsheetUpload,
+  storageSafeName,
+} from "./security/upload";
+import {
+  consume,
+  enforce,
+  peek as peekRateLimit,
+  rateKey,
+  reset as resetRateLimit,
+  RULES,
+} from "./security/rateLimit";
+import { readFirstSheetMatrix } from "./security/spreadsheet";
 import {
   establishSession,
   generateTemporaryPassword,
@@ -72,9 +118,8 @@ import {
   normalizeEmail,
   revokeCurrentSession,
   revokeAllUserSessions,
-  assertLoginRateLimit,
-  clearFailedLogins,
-  recordFailedLogin,
+  DUMMY_PASSWORD_HASH,
+  requestIp,
   TEMPORARY_PASSWORD_TTL_MS,
   verifyPassword,
 } from "./localAuth";
@@ -108,39 +153,173 @@ const shouldReopenContract = (contract: {
   !contract.terminationDate &&
   !!contract.endDate &&
   contract.endDate > new Date().toISOString().slice(0, 10);
+// Authorization lives in ./authz (single source of truth for block-based access).
 const canManageContract = (
-  user: { id: number; role: string; managedBlocks?: string | null },
-  contract: { blockFolder?: string | null } | null | undefined
-) => canAccessContractBlock(user, contract?.blockFolder);
+  user: Actor,
+  contract: Parameters<typeof canAccessContract>[1]
+) => canAccessContract(user, contract);
 const requireContractAccess = (
-  user: { id: number; role: string; managedBlocks?: string | null },
-  contract: { blockFolder?: string | null } | null | undefined
+  user: Actor,
+  contract: Parameters<typeof canAccessContract>[1]
 ) => {
-  if (!canManageContract(user, contract))
-    throw new Error("Нет доступа к договору: блок не назначен менеджеру");
+  if (!canAccessContract(user, contract))
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Нет доступа к договору: блок не назначен менеджеру",
+    });
 };
 const requireBlockAccess = (
-  user: { id: number; role: string; managedBlocks?: string | null },
+  user: Actor,
   blockFolder: string | null | undefined
-) => {
-  if (!canAccessContractBlock(user, blockFolder))
-    throw new Error("Нет доступа к этому блоку: он не назначен менеджеру");
-};
-const scopeAccrualRows = async (
-  user: { id: number; role: string; managedBlocks?: string | null },
-  rows: Awaited<ReturnType<typeof listAccruals>>
-) => {
-  if (user.role === "admin") return rows;
-  const contracts = await listContracts(true);
-  const allowed = new Set(
-    contracts
-      .filter(contract => canManageContract(user, contract))
-      .map(contract => contract.id)
+) => requireBlock(user, blockFolder);
+const scopeAccrualRows = <
+  T extends Parameters<typeof filterAccruals>[1][number],
+>(
+  user: Actor,
+  rows: T[]
+) => filterAccruals(user, rows);
+
+// Shared input bounds (DoS / overflow / NaN protection).
+const money = z.number().finite().positive().max(LIMITS.maxAmount);
+const shortText = (max: number = LIMITS.shortText) => z.string().max(max);
+const idSchema = z.number().int().positive();
+const periodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/)
+  .refine(value => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return (
+      !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    );
+  }, "Некорректная дата");
+const dataUrlSchema = (maxBytes: number) =>
+  z
+    .string()
+    .min(20)
+    .max(Math.ceil((maxBytes * 4) / 3) + 200);
+const fileNameSchema = z.string().trim().min(1).max(LIMITS.fileName);
+
+const IMPORT_COLUMNS = [
+  "contractNumber",
+  "contractDate",
+  "tenantName",
+  "tenantContact",
+  "tenantEmail",
+  "propertyName",
+  "unitName",
+  "startDate",
+  "endDate",
+  "tariffType",
+  "tariffAmount",
+  "status",
+  "notes",
+] as const;
+const standaloneValues = (row: {
+  period: string;
+  serviceFrom: string;
+  serviceTo: string;
+  quantity: number;
+  amount: number;
+  tenantName: string;
+  tenantEmail?: string;
+  tenantCategory?: string;
+  tenantNumber?: string;
+  propertyName: string;
+  unitName?: string;
+  tariffType: "monthly" | "daily";
+  tariffAmount: number;
+  notes?: string;
+}) => ({
+  contractId: null,
+  period: row.period,
+  serviceFrom: new Date(`${row.serviceFrom}T00:00:00Z`),
+  serviceTo: new Date(`${row.serviceTo}T00:00:00Z`),
+  quantity: row.quantity.toFixed(2),
+  amount: row.amount.toFixed(2),
+  tenantName: row.tenantName,
+  tenantEmail: row.tenantEmail?.trim() || null,
+  tenantCategory: row.tenantCategory?.trim() || null,
+  tenantNumber: row.tenantNumber?.trim() || null,
+  propertyName: row.propertyName,
+  unitName: row.unitName?.trim() || null,
+  tariffType: row.tariffType,
+  tariffAmount: row.tariffAmount.toFixed(2),
+  notes: row.notes?.trim() || null,
+  status: "draft" as const,
+});
+/** Unique invoice number; the database's unique index is the final guard, collisions are retried. */
+async function createInvoiceWithNumber(
+  data: Omit<Parameters<typeof createInvoice>[0], "invoiceNumber">,
+  items: Parameters<typeof createInvoice>[1]
+) {
+  for (let attempt = 0; ; attempt++) {
+    const invoiceNumber = `INV-${new Date().getFullYear()}-${String(randomInt(0, 1_000_000)).padStart(6, "0")}`;
+    try {
+      return await createInvoice({ ...data, invoiceNumber }, items);
+    } catch (error) {
+      const duplicate = /duplicate entry|ER_DUP_ENTRY/i.test(
+        String((error as any)?.cause?.message ?? (error as any)?.message ?? "")
+      );
+      if (
+        !duplicate ||
+        attempt >= 4 ||
+        !/invoiceNumber/i.test(
+          String((error as any)?.cause?.message ?? (error as any)?.message)
+        )
+      )
+        throw error;
+    }
+  }
+}
+
+/** E-mail recipients of an invoice, taken from its accruals' contracts (or the accrual itself). */
+async function invoiceRecipients(items: Array<{ accrualId: number }>) {
+  const accrualRows = await dbHelpers.listAccrualsByIds(
+    items.map(item => item.accrualId)
   );
-  return rows.filter(
-    row => row.contractId != null && allowed.has(row.contractId)
+  const contractsById = new Map(
+    (await listContracts(true)).map(contract => [contract.id, contract])
   );
+  return Array.from(
+    new Set(
+      accrualRows
+        .map(accrual =>
+          accrual.contractId == null
+            ? accrual.tenantEmail?.trim()
+            : contractsById.get(accrual.contractId)?.tenantEmail?.trim()
+        )
+        .filter((email): email is string => Boolean(email))
+    )
+  );
+}
+
+/** Messages shown to users: our own (Russian) messages pass, anything technical is replaced. */
+function publicErrorMessage(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : "";
+  return /[А-Яа-яЁё]/.test(message) && message.length < 300
+    ? message
+    : fallback;
+}
+
+const isRaceSkip = (error: unknown) => {
+  const text = `${(error as any)?.message ?? ""} ${(error as any)?.cause?.message ?? ""}`;
+  return /нельзя изменять|ER_DUP_ENTRY|duplicate entry/i.test(text);
 };
+
+/** Business rule kept from before: accruals without a contract are deleted by an Administrator only. */
+function assertCanDeleteAccrual(
+  user: Actor,
+  accrual: { status: string; contractId: number | null }
+) {
+  if (accrual.status === "invoiced")
+    throw new Error("Начисление в счёте нельзя удалить");
+  if (accrual.contractId == null && user.role !== "admin")
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Бездоговорное начисление может удалить только Administrator",
+    });
+}
 
 const optionalEmail = z
   .union([z.string().trim().email("Укажите корректный Email"), z.literal("")])
@@ -184,7 +363,8 @@ const recalculateDraftAccrualsForContract = async (contract: any) => {
       await deleteAccrual(row.id);
       continue;
     }
-    await updateAccrual(row.id, {
+    // Draft-only update: an accrual invoiced in the meantime is left untouched.
+    await updateDraftAccrual(row.id, {
       serviceFrom: new Date(result.serviceFrom + "T00:00:00Z"),
       serviceTo: new Date(result.serviceTo + "T00:00:00Z"),
       quantity: result.quantity.toFixed(2),
@@ -197,14 +377,14 @@ const recalculateDraftAccrualsForContract = async (contract: any) => {
       unitName: contract.unitName ?? null,
       tariffType: contract.tariffType,
       tariffAmount: String(contract.tariffAmount),
-    });
+    }).catch(() => undefined);
   }
   return rows.length;
 };
 const paymentImportRowInput = z.object({
   invoiceNumber: z.string().trim().min(1).max(120),
-  amount: z.number().positive(),
-  paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  amount: money,
+  paidAt: isoDate,
   method: z.enum(["bank", "portal", "card", "cash", "other"]),
   reference: z.string().max(255).optional(),
   note: z.string().max(2000).optional(),
@@ -212,9 +392,9 @@ const paymentImportRowInput = z.object({
 
 const standaloneAccrualInput = z
   .object({
-    period: z.string().regex(/^\d{4}-\d{2}$/),
-    serviceFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    serviceTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    period: periodSchema,
+    serviceFrom: isoDate,
+    serviceTo: isoDate,
     tenantName: z.string().trim().min(1).max(255),
     tenantEmail: optionalEmail,
     tenantCategory: z.string().trim().max(120).optional(),
@@ -222,9 +402,9 @@ const standaloneAccrualInput = z
     propertyName: z.string().trim().min(1).max(255),
     unitName: z.string().trim().max(120).optional(),
     tariffType: z.enum(["monthly", "daily"]),
-    tariffAmount: z.number().positive(),
-    quantity: z.number().positive(),
-    amount: z.number().positive(),
+    tariffAmount: money,
+    quantity: z.number().finite().positive().max(100_000),
+    amount: money,
     notes: z.string().max(2000).optional(),
   })
   .superRefine((value, ctx) => {
@@ -245,32 +425,26 @@ const standaloneAccrualInput = z
 export const contractInput = z
   .object({
     contractNumber: z.string().trim().max(120).optional(),
-    contractDate: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional(),
-    tenantName: z.string().trim().min(1),
-    tenantContact: z.string().optional(),
+    contractDate: isoDate.optional(),
+    tenantName: z.string().trim().min(1).max(255),
+    tenantContact: z.string().max(255).optional(),
     tenantEmail: optionalEmail,
     tenantCategory: z.string().trim().max(120).optional(),
     tenantNumber: z.string().trim().max(120).optional(),
-    propertyName: z.string().trim().min(1),
-    unitName: z.string().optional(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    propertyName: z.string().trim().min(1).max(255),
+    unitName: z.string().max(120).optional(),
+    startDate: isoDate,
+    endDate: isoDate,
     terminationDate: z.preprocess(
       value => (value === "" ? undefined : value),
-      z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional()
+      isoDate.optional()
     ),
     terminationReason: z.string().trim().max(2000).optional(),
     blockFolder: z.string().trim().max(120).optional(),
     tariffType: z.enum(["monthly", "daily"]),
-    tariffAmount: z.number().positive(),
+    tariffAmount: money,
     status: z.enum(["active", "paused", "ended"]).default("active"),
-    notes: z.string().optional(),
+    notes: z.string().max(LIMITS.longText).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.startDate > value.endDate)
@@ -544,15 +718,19 @@ async function extractContractFromScan(input: {
   mimeType: "application/pdf" | "image/jpeg" | "image/png";
   fileName?: string;
 }) {
-  if (input.dataUrl.length > 20_000_000)
-    throw new Error("Файл слишком большой для распознавания");
+  // Size, encoding and real file type are verified before any parser sees the bytes.
+  const upload = decodeScanUpload(input.dataUrl, input.mimeType);
+  const base64 = upload.buffer.toString("base64");
+  const mimeType = upload.mimeType as typeof input.mimeType;
+  const fileName = input.fileName
+    ? cleanDisplayFileName(input.fileName)
+    : undefined;
   const provider = getOcrProvider();
   if (provider) {
     try {
-      const base64 = input.dataUrl.slice(input.dataUrl.indexOf(",") + 1);
       const text = await provider.recognize({
         base64,
-        mimeType: input.mimeType,
+        mimeType,
         system: OCR_SYSTEM_PROMPT,
         prompt: OCR_FIELDS_PROMPT,
       });
@@ -560,13 +738,12 @@ async function extractContractFromScan(input: {
         throw new Error("Сервис распознавания вернул пустой ответ");
       return scanResultValidator.parse(withScanDefaults(parseOcrJson(text)));
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.warn(`[OCR:${provider.name}]`, reason);
+      console.warn(`[OCR:${provider.name}]`, error);
       return buildOcrFallback(
-        input.fileName,
+        fileName,
         isOcrCapacityError(error)
           ? undefined
-          : `Автораспознавание не сработало (${reason.slice(0, 160)}). Номер и дата взяты из имени файла.`
+          : "Автораспознавание не сработало. Номер и дата взяты из имени файла."
       );
     }
   }
@@ -577,25 +754,34 @@ async function extractContractFromScan(input: {
   ) {
     // Default: our own recognition (MuPDF + Tesseract + contract rules), no external service involved.
     try {
-      const base64 = input.dataUrl.slice(input.dataUrl.indexOf(",") + 1);
       const {
         rawText: _raw,
         usedOcr,
         ...fields
-      } = await recognizeLocally({ base64, mimeType: input.mimeType });
+      } = await recognizeLocally({ base64, mimeType });
       const merged = withScanDefaults(
-        mergeWithFileName(fields, input.fileName, usedOcr)
+        mergeWithFileName(fields, fileName, usedOcr)
       );
       return scanResultValidator.parse(merged);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.warn("[OCR:local]", reason);
+      console.warn("[OCR:local]", error);
+      if (error instanceof Error && error.name === "OcrBusyError")
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: error.message,
+        });
       return buildOcrFallback(
-        input.fileName,
-        `Распознавание не удалось (${reason.slice(0, 120)}). Номер и дата взяты из имени файла.`
+        fileName,
+        "Распознавание не удалось. Номер и дата взяты из имени файла."
       );
     }
   }
+  input = {
+    ...input,
+    dataUrl: `data:${mimeType};base64,${base64}`,
+    mimeType,
+    fileName,
+  };
   try {
     const models = await listLLMModels();
     const model =
@@ -680,9 +866,9 @@ export const appRouter = router({
     updateUser: adminProcedure
       .input(
         z.object({
-          id: z.number(),
+          id: idSchema,
           role: z.enum(["admin", "manager"]).optional(),
-          departmentId: z.number().nullable().optional(),
+          departmentId: idSchema.nullable().optional(),
           managedBlocks: z
             .array(z.string().trim().min(1).max(120))
             .max(20)
@@ -726,9 +912,9 @@ export const appRouter = router({
       .input(
         z.object({
           name: z.string().trim().min(1).max(255),
-          email: z.string().trim().email(),
+          email: z.string().trim().max(320).email(),
           role: z.enum(["admin", "manager"]),
-          departmentId: z.number().nullable().optional(),
+          departmentId: idSchema.nullable().optional(),
           managedBlocks: z
             .array(z.string().trim().min(1).max(120))
             .max(20)
@@ -819,29 +1005,36 @@ export const appRouter = router({
       .input(z.object({ name: z.string().trim().min(2).max(255) }))
       .mutation(({ input }) => dbHelpers.createDepartment(input.name)),
     documentPermissions: adminProcedure
-      .input(z.object({ documentId: z.number().optional() }).optional())
+      .input(z.object({ documentId: idSchema.optional() }).optional())
       .query(({ input }) =>
         dbHelpers.listDocumentPermissions(input?.documentId)
       ),
     setDocumentPermission: adminProcedure
       .input(
         z.object({
-          documentId: z.number(),
-          userId: z.number().nullable().optional(),
-          departmentId: z.number().nullable().optional(),
+          documentId: idSchema,
+          userId: idSchema.nullable().optional(),
+          departmentId: idSchema.nullable().optional(),
           canView: z.enum(["yes", "no"]),
         })
       )
-      .mutation(({ input }) =>
-        dbHelpers.upsertDocumentPermission({
+      .mutation(async ({ input }) => {
+        if (!(await getDocument(input.documentId)))
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Документ не найден",
+          });
+        if (input.userId == null && input.departmentId == null)
+          throw new Error("Укажите пользователя или подразделение");
+        return dbHelpers.upsertDocumentPermission({
           documentId: input.documentId,
           userId: input.userId ?? null,
           departmentId: input.departmentId ?? null,
           canView: input.canView,
-        })
-      ),
+        });
+      }),
     revokeDocumentPermission: adminProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: idSchema }))
       .mutation(({ input }) => dbHelpers.deleteDocumentPermission(input.id)),
   }),
   system: systemRouter,
@@ -852,31 +1045,65 @@ export const appRouter = router({
     login: publicProcedure
       .input(
         z.object({
-          email: z.string().trim().email(),
-          password: z.string().min(1),
+          email: z.string().trim().max(320).email(),
+          password: z.string().min(1).max(LIMITS.passwordMax),
         })
       )
       .mutation(async ({ input, ctx }) => {
         const emailNormalized = normalizeEmail(input.email);
-        assertLoginRateLimit(ctx.req, emailNormalized);
+        const ip = requestIp(ctx.req);
+        // Throttling is counted per account+IP, per account (credential stuffing from many IPs)
+        // and per IP (password spraying); counters live in the database (shared by all instances).
+        const tooMany =
+          "Слишком много попыток входа. Подождите 15 минут и попробуйте снова.";
+        // Per account+IP every attempt counts (atomic, also stops parallel bursts). Per account and
+        // per IP only FAILED attempts count, so normal sign-ins never consume those budgets.
+        const ipKey = rateKey("ip", ip);
+        const accountKey = rateKey("email", emailNormalized);
+        for (const [rule, key] of [
+          [RULES.loginPerIp, ipKey],
+          [RULES.loginPerAccount, accountKey],
+        ] as const)
+          if (!(await peekRateLimit(rule, key)).allowed)
+            throw new TRPCError({
+              code: "TOO_MANY_REQUESTS",
+              message: tooMany,
+            });
+        await enforce(
+          RULES.loginPerAccountAndIp,
+          rateKey("ip-email", ip, emailNormalized),
+          tooMany
+        );
         const user = await dbHelpers.getUserByEmailNormalized(emailNormalized);
-        if (
-          !user ||
-          user.accountStatus !== "active" ||
-          !(await verifyPassword(input.password, user.passwordHash))
-        ) {
-          recordFailedLogin(ctx.req, emailNormalized);
-          throw new Error("Неверный Email или пароль");
+        // The password is always hashed, even for unknown accounts: equal timing, no user enumeration.
+        const passwordOk = await verifyPassword(
+          input.password,
+          user?.passwordHash ?? DUMMY_PASSWORD_HASH
+        );
+        if (!user || !passwordOk || user.accountStatus !== "active") {
+          await consume(RULES.loginPerIp, ipKey);
+          await consume(RULES.loginPerAccount, accountKey);
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Неверный Email или пароль",
+          });
         }
         if (
           user.mustChangePassword &&
           user.temporaryPasswordExpiresAt &&
           user.temporaryPasswordExpiresAt.getTime() <= Date.now()
         )
-          throw new Error(
-            "Срок действия временного пароля истёк. Попросите администратора выдать новый."
-          );
-        clearFailedLogins(ctx.req, emailNormalized);
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message:
+              "Срок действия временного пароля истёк. Попросите администратора выдать новый.",
+          });
+        await resetRateLimit(
+          RULES.loginPerAccountAndIp,
+          rateKey("ip-email", ip, emailNormalized)
+        );
+        // Session fixation: a session presented before login is revoked; a fresh token is issued.
+        await revokeCurrentSession(ctx.req);
         const session = await establishSession(ctx.req, ctx.res, user.id);
         ctx.res.cookie(COOKIE_NAME, session.token, {
           ...getSessionCookieOptions(ctx.req),
@@ -897,12 +1124,17 @@ export const appRouter = router({
     changePassword: protectedProcedure
       .input(
         z.object({
-          currentPassword: z.string().min(1),
-          newPassword: z.string().min(10),
-          confirmPassword: z.string().min(10),
+          currentPassword: z.string().min(1).max(LIMITS.passwordMax),
+          newPassword: z.string().min(10).max(LIMITS.passwordMax),
+          confirmPassword: z.string().min(10).max(LIMITS.passwordMax),
         })
       )
       .mutation(async ({ input, ctx }) => {
+        await enforce(
+          RULES.passwordChange,
+          rateKey("user", ctx.user.id),
+          "Слишком много попыток смены пароля. Подождите 15 минут."
+        );
         if (input.newPassword !== input.confirmPassword)
           throw new Error("Пароли не совпадают");
         if (
@@ -942,7 +1174,7 @@ export const appRouter = router({
     rename: protectedProcedure
       .input(
         z.object({
-          id: z.number().int().positive(),
+          id: idSchema,
           oldName: z.string().min(1),
           name: z.string().trim().min(1).max(120),
         })
@@ -956,7 +1188,7 @@ export const appRouter = router({
         return renameContractFolder(input.id, input.name, input.oldName);
       }),
     remove: protectedProcedure
-      .input(z.object({ id: z.number().int().positive() }))
+      .input(z.object({ id: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
@@ -976,21 +1208,15 @@ export const appRouter = router({
           : rows.filter(row => canManageContract(ctx.user, row));
       }),
     audit: protectedProcedure
-      .input(z.object({ contractId: z.number() }))
+      .input(z.object({ contractId: idSchema }))
       .query(async ({ input, ctx }) => {
-        const contract = await getContract(input.contractId);
-        if (!contract) throw new Error("Договор не найден");
-        if (!canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
+        const contract = await requireContractById(ctx.user, input.contractId);
         return dbHelpers.listContractAudit(contract.id);
       }),
     logView: protectedProcedure
-      .input(z.object({ contractId: z.number() }))
+      .input(z.object({ contractId: idSchema }))
       .mutation(async ({ input, ctx }) => {
-        const contract = await getContract(input.contractId);
-        if (!contract) throw new Error("Договор не найден");
-        if (!canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
+        const contract = await requireContractById(ctx.user, input.contractId);
         await recordContractAudit({
           contractId: contract.id,
           actorUserId: ctx.user.id,
@@ -1043,17 +1269,14 @@ export const appRouter = router({
         return contract;
       }),
     delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageContracts",
           "Недостаточно прав для архивирования договора"
         );
-        const contract = await getContract(input.id);
-        if (!contract) throw new Error("Договор не найден");
-        if (!canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
+        const contract = await requireContractById(ctx.user, input.id);
         const result = await dbHelpers.archiveContract(input.id);
         await recordContractAudit({
           contractId: input.id,
@@ -1064,17 +1287,14 @@ export const appRouter = router({
         return result;
       }),
     restore: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageContracts",
           "Недостаточно прав для восстановления договора"
         );
-        const contract = await getContract(input.id);
-        if (!contract) throw new Error("Договор не найден");
-        if (!canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
+        const contract = await requireContractById(ctx.user, input.id);
         const result = await dbHelpers.restoreContract(input.id);
         await recordContractAudit({
           contractId: input.id,
@@ -1090,7 +1310,7 @@ export const appRouter = router({
     permanentlyDelete: adminProcedure
       .input(
         z.object({
-          id: z.number().int().positive(),
+          id: idSchema,
           confirmation: z.literal("УДАЛИТЬ"),
         })
       )
@@ -1098,17 +1318,16 @@ export const appRouter = router({
     permanentlyDeleteMany: adminProcedure
       .input(
         z.object({
-          ids: z.array(z.number().int().positive()).min(1),
+          ids: z.array(idSchema).min(1).max(LIMITS.bulkIds),
           confirmation: z.literal("УДАЛИТЬ"),
         })
       )
       .mutation(async ({ input }) => permanentlyDeleteContracts(input.ids)),
     update: protectedProcedure
-      .input(contractInput.safeExtend({ id: z.number() }))
+      .input(contractInput.safeExtend({ id: idSchema }))
       .mutation(async ({ input, ctx }) => {
         const { id, ...data } = input;
-        const existing = await getContract(id);
-        if (existing) requireContractAccess(ctx.user, existing);
+        const existing = await requireContractById(ctx.user, id);
         assertPermission(
           ctx.user.role,
           "manageContracts",
@@ -1155,21 +1374,29 @@ export const appRouter = router({
     previewScan: protectedProcedure
       .input(
         z.object({
-          dataUrl: z.string().min(50),
-          fileName: z.string().min(1).optional(),
+          dataUrl: dataUrlSchema(LIMITS.scanBytes),
+          fileName: fileNameSchema.optional(),
           mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
         })
       )
-      .mutation(({ input }) => extractContractFromScan(input)),
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для распознавания договоров"
+        );
+        await enforce(RULES.scanRecognition, rateKey("user", ctx.user.id));
+        return extractContractFromScan(input);
+      }),
     createFromScan: protectedProcedure
       .input(
         z.object({
-          fileName: z.string().min(1),
+          fileName: fileNameSchema,
           mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-          dataUrl: z.string().min(50),
+          dataUrl: dataUrlSchema(LIMITS.scanBytes),
           fields: contractInput,
           duplicateMode: z.enum(["new", "overwrite", "merge"]).default("new"),
-          duplicateContractId: z.number().int().positive().optional(),
+          duplicateContractId: idSchema.optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1178,6 +1405,10 @@ export const appRouter = router({
           "manageContracts",
           "Недостаточно прав для создания договора"
         );
+        await enforce(RULES.fileUpload, rateKey("user", ctx.user.id));
+        // Validated once, before anything is written: real type from magic bytes, bounded size.
+        const upload = decodeScanUpload(input.dataUrl, input.mimeType);
+        const displayName = cleanDisplayFileName(input.fileName);
         const target = input.duplicateContractId
           ? await getContract(input.duplicateContractId)
           : null;
@@ -1240,6 +1471,7 @@ export const appRouter = router({
         ) {
           if (!target)
             throw new Error("Договор для операции с дубликатом не найден");
+          await ensureUniqueContractNumber(fields.contractNumber, target.id);
           const blockFolder = deriveBlockFolder(
             String(fields.propertyName),
             fields.unitName,
@@ -1269,10 +1501,9 @@ export const appRouter = router({
             ...(shouldReopenContract(fields) ? { archivedAt: null } : {}),
           });
           if (!updated) throw new Error("Не удалось обновить договор");
-          const base64 = input.dataUrl.split(",")[1];
-          if (!base64) throw new Error("Некорректный файл");
-          const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_");
-          const encrypted = encryptContractFile(Buffer.from(base64, "base64"));
+          await recalculateDraftAccrualsForContract(updated);
+          const safeName = storageSafeName(displayName);
+          const encrypted = encryptContractFile(upload.buffer);
           const { key, url } = await storagePut(
             String(ctx.user.id) +
               "/contracts/scans/" +
@@ -1285,8 +1516,8 @@ export const appRouter = router({
           );
           await createDocument({
             contractId: updated.id,
-            fileName: input.fileName,
-            mimeType: input.mimeType,
+            fileName: displayName,
+            mimeType: upload.mimeType as "application/pdf",
             fileKey: key,
             fileUrl: url,
             encryptionVersion: encrypted.version,
@@ -1311,10 +1542,8 @@ export const appRouter = router({
           input.fields.blockFolder
         );
         requireBlockAccess(ctx.user, blockFolder);
-        const base64 = input.dataUrl.split(",")[1];
-        if (!base64) throw new Error("Некорректный файл");
-        const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_");
-        const encrypted = encryptContractFile(Buffer.from(base64, "base64"));
+        const safeName = storageSafeName(displayName);
+        const encrypted = encryptContractFile(upload.buffer);
         const { key, url } = await storagePut(
           String(ctx.user.id) +
             "/contracts/scans/" +
@@ -1350,8 +1579,8 @@ export const appRouter = router({
           throw new Error("Не удалось сохранить договор после загрузки скана");
         await createDocument({
           contractId: contract.id,
-          fileName: input.fileName,
-          mimeType: input.mimeType,
+          fileName: displayName,
+          mimeType: upload.mimeType as "application/pdf",
           fileKey: key,
           fileUrl: url,
           encryptionVersion: encrypted.version,
@@ -1369,22 +1598,43 @@ export const appRouter = router({
     previewImport: protectedProcedure
       .input(
         z.object({
-          dataUrl: z.string().min(50),
-          mapping: z.record(z.string(), z.number()).optional(),
+          dataUrl: dataUrlSchema(LIMITS.spreadsheetBytes),
+          // Only known columns, only sane indexes (no arbitrary keys → no prototype pollution).
+          mapping: z
+            .object(
+              Object.fromEntries(
+                IMPORT_COLUMNS.map(key => [
+                  key,
+                  z
+                    .number()
+                    .int()
+                    .min(0)
+                    .max(LIMITS.spreadsheetColumns)
+                    .optional(),
+                ])
+              ) as Record<
+                (typeof IMPORT_COLUMNS)[number],
+                z.ZodOptional<z.ZodNumber>
+              >
+            )
+            .strict()
+            .optional(),
         })
       )
-      .mutation(({ input }) => {
-        const base64 = input.dataUrl.split(",")[1];
-        if (!base64) throw new Error("Некорректный Excel-файл");
-        return parseContractsExcel(
-          Buffer.from(base64, "base64"),
-          input.mapping as any
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для импорта договоров"
         );
+        await enforce(RULES.spreadsheetParse, rateKey("user", ctx.user.id));
+        const upload = decodeSpreadsheetUpload(input.dataUrl);
+        return parseContractsExcel(upload.buffer, input.mapping as any);
       }),
     moveToFolder: protectedProcedure
       .input(
         z.object({
-          ids: z.array(z.number().int().positive()).min(1),
+          ids: z.array(idSchema).min(1).max(LIMITS.bulkIds),
           folderName: z.string().trim().min(1).max(120),
         })
       )
@@ -1415,7 +1665,9 @@ export const appRouter = router({
         return result;
       }),
     importRows: protectedProcedure
-      .input(z.object({ rows: z.array(contractInput).min(1) }))
+      .input(
+        z.object({ rows: z.array(contractInput).min(1).max(LIMITS.importRows) })
+      )
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
@@ -1468,7 +1720,7 @@ export const appRouter = router({
   }),
   documents: router({
     list: protectedProcedure
-      .input(z.object({ contractId: z.number().optional() }).optional())
+      .input(z.object({ contractId: idSchema.optional() }).optional())
       .query(async ({ input, ctx }) => {
         const docs = await listDocuments(input?.contractId);
         const sanitize = (doc: (typeof docs)[number]) => {
@@ -1490,16 +1742,13 @@ export const appRouter = router({
         return visible;
       }),
     download: protectedProcedure
-      .input(z.object({ documentId: z.number().int().positive() }))
+      .input(z.object({ documentId: idSchema }))
       .query(async ({ input, ctx }) => {
-        const document = await getDocument(input.documentId);
-        if (!document) throw new Error("Документ не найден");
-        const contract = await getContract(document.contractId);
-        const permissions = await dbHelpers.listDocumentPermissions(
-          document.id
+        const { document } = await requireDocumentAccess(
+          ctx.user,
+          input.documentId,
+          "view"
         );
-        if (!contract || !canViewDocument(ctx.user, contract, permissions))
-          throw new Error("Нет доступа к документу");
         const stored = await storageRead(document.fileKey);
         const data =
           document.encryptionVersion > 0 &&
@@ -1511,19 +1760,26 @@ export const appRouter = router({
                 authTag: document.encryptionAuthTag,
               })
             : stored;
+        // Only the three scan types are ever returned as such; anything else is an opaque download
+        // (a stored file can never be opened as HTML/SVG in the app's origin).
+        const mimeType = (
+          [MIME_BY_KIND.pdf, MIME_BY_KIND.jpeg, MIME_BY_KIND.png] as string[]
+        ).includes(document.mimeType)
+          ? document.mimeType
+          : "application/octet-stream";
         return {
           fileName: document.fileName,
-          mimeType: document.mimeType,
+          mimeType,
           dataBase64: data.toString("base64"),
         };
       }),
     upload: protectedProcedure
       .input(
         z.object({
-          contractId: z.number(),
-          fileName: z.string().min(1),
+          contractId: idSchema,
+          fileName: fileNameSchema,
           mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-          dataUrl: z.string().min(20),
+          dataUrl: dataUrlSchema(LIMITS.scanBytes),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1532,23 +1788,20 @@ export const appRouter = router({
           "manageContracts",
           "Недостаточно прав для загрузки документа"
         );
-        const contract = await getContract(input.contractId);
-        if (!contract || !canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
-        const base64 = input.dataUrl.split(",")[1];
-        if (!base64) throw new Error("Некорректный файл");
-        const buffer = Buffer.from(base64, "base64");
-        const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_");
-        const encrypted = encryptContractFile(buffer);
+        const contract = await requireContractById(ctx.user, input.contractId);
+        await enforce(RULES.fileUpload, rateKey("user", ctx.user.id));
+        const upload = decodeScanUpload(input.dataUrl, input.mimeType);
+        const displayName = cleanDisplayFileName(input.fileName);
+        const encrypted = encryptContractFile(upload.buffer);
         const { key, url } = await storagePut(
-          `${ctx.user.id}/contracts/${input.contractId}/${Date.now()}-${safeName}.enc`,
+          `${ctx.user.id}/contracts/${contract.id}/${Date.now()}-${storageSafeName(displayName)}.enc`,
           encrypted.data,
           "application/octet-stream"
         );
         return createDocument({
-          contractId: input.contractId,
-          fileName: input.fileName,
-          mimeType: input.mimeType,
+          contractId: contract.id,
+          fileName: displayName,
+          mimeType: upload.mimeType as "application/pdf",
           fileKey: key,
           fileUrl: url,
           encryptionVersion: encrypted.version,
@@ -1557,19 +1810,19 @@ export const appRouter = router({
         });
       }),
     delete: protectedProcedure
-      .input(z.object({ documentId: z.number().int().positive() }))
+      .input(z.object({ documentId: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageContracts",
           "Недостаточно прав для удаления скана"
         );
-        const document = await getDocument(input.documentId);
-        if (!document) throw new Error("Скан не найден");
-        const contract = await getContract(document.contractId);
-        if (!contract || !canManageContract(ctx.user, contract))
-          throw new Error("Нет доступа к договору");
-        const deleted = await deleteDocument(input.documentId);
+        const { document } = await requireDocumentAccess(
+          ctx.user,
+          input.documentId,
+          "manage"
+        );
+        const deleted = await deleteDocument(document.id);
         await recordContractAudit({
           contractId: document.contractId,
           actorUserId: ctx.user.id,
@@ -1585,14 +1838,14 @@ export const appRouter = router({
   }),
   accruals: router({
     list: protectedProcedure
-      .input(z.object({ period: z.string().regex(/^\d{4}-\d{2}$/) }))
+      .input(z.object({ period: periodSchema }))
       .query(async ({ input, ctx }) =>
         scopeAccrualRows(ctx.user, await listAccruals(input.period))
       ),
     generate: protectedProcedure
       .input(
         z.object({
-          period: z.string().regex(/^\d{4}-\d{2}$/),
+          period: periodSchema,
           blockFolder: z.string().trim().max(120).optional(),
         })
       )
@@ -1650,16 +1903,23 @@ export const appRouter = router({
             tariffAmount: String(contract.tariffAmount),
           };
           if (previous?.status === "invoiced") continue;
-          if (previous) created.push(await updateAccrual(previous.id, values));
-          else
-            created.push(
-              await createAccrual({
-                contractId: contract.id,
-                period: input.period,
-                ...values,
-                status: "draft",
-              })
-            );
+          try {
+            if (previous)
+              created.push(await updateDraftAccrual(previous.id, values));
+            else
+              created.push(
+                await createAccrual({
+                  contractId: contract.id,
+                  period: input.period,
+                  ...values,
+                  status: "draft",
+                })
+              );
+          } catch (error) {
+            // Invoiced meanwhile, or created by a concurrent run (unique contract+period): skip.
+            if (isRaceSkip(error)) continue;
+            throw error;
+          }
         }
         return created;
       }),
@@ -1671,73 +1931,70 @@ export const appRouter = router({
           "manageAccruals",
           "Недостаточно прав для создания начисления"
         );
-        return createAccrual({
-          contractId: null,
-          period: input.period,
-          serviceFrom: new Date(`${input.serviceFrom}T00:00:00Z`),
-          serviceTo: new Date(`${input.serviceTo}T00:00:00Z`),
-          quantity: input.quantity.toFixed(2),
-          amount: input.amount.toFixed(2),
-          tenantName: input.tenantName,
-          tenantEmail: input.tenantEmail?.trim() || null,
-          tenantCategory: input.tenantCategory?.trim() || null,
-          tenantNumber: input.tenantNumber?.trim() || null,
-          propertyName: input.propertyName,
-          unitName: input.unitName?.trim() || null,
-          tariffType: input.tariffType,
-          tariffAmount: input.tariffAmount.toFixed(2),
-          notes: input.notes?.trim() || null,
-          status: "draft",
-        });
+        // A manager may create accruals only for the blocks assigned to them.
+        requireBlockAccess(
+          ctx.user,
+          deriveBlockFolder(input.propertyName, input.unitName, null)
+        );
+        return createAccrual(standaloneValues(input));
       }),
     importStandalone: protectedProcedure
-      .input(z.object({ rows: z.array(standaloneAccrualInput).min(1) }))
+      .input(
+        z.object({
+          rows: z.array(standaloneAccrualInput).min(1).max(LIMITS.importRows),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageAccruals",
           "Недостаточно прав для импорта начислений"
         );
+        // All rows are checked before anything is written (no partial import into foreign blocks).
+        for (const row of input.rows)
+          requireBlockAccess(
+            ctx.user,
+            deriveBlockFolder(row.propertyName, row.unitName, null)
+          );
         const imported = [];
         for (const row of input.rows)
-          imported.push(
-            await createAccrual({
-              contractId: null,
-              period: row.period,
-              serviceFrom: new Date(`${row.serviceFrom}T00:00:00Z`),
-              serviceTo: new Date(`${row.serviceTo}T00:00:00Z`),
-              quantity: row.quantity.toFixed(2),
-              amount: row.amount.toFixed(2),
-              tenantName: row.tenantName,
-              tenantEmail: row.tenantEmail?.trim() || null,
-              tenantCategory: row.tenantCategory?.trim() || null,
-              tenantNumber: row.tenantNumber?.trim() || null,
-              propertyName: row.propertyName,
-              unitName: row.unitName?.trim() || null,
-              tariffType: row.tariffType,
-              tariffAmount: row.tariffAmount.toFixed(2),
-              notes: row.notes?.trim() || null,
-              status: "draft",
-            })
-          );
+          imported.push(await createAccrual(standaloneValues(row)));
         return imported;
+      }),
+    /** Reads an uploaded .xlsx on the server (size/row limited) and returns its table. */
+    readImportFile: protectedProcedure
+      .input(z.object({ dataUrl: dataUrlSchema(LIMITS.spreadsheetBytes) }))
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageAccruals",
+          "Недостаточно прав для импорта начислений"
+        );
+        await enforce(RULES.spreadsheetParse, rateKey("user", ctx.user.id));
+        const upload = decodeSpreadsheetUpload(input.dataUrl);
+        const [header = [], ...rows] = await readFirstSheetMatrix(
+          upload.buffer
+        );
+        const headers = header.map(
+          (cell, index) => String(cell ?? "").trim() || `__EMPTY_${index}`
+        );
+        return {
+          headers,
+          rows: rows.filter(cells =>
+            cells.some(cell => String(cell ?? "").trim())
+          ),
+        };
       }),
     updateFromPreview: protectedProcedure
       .input(
         z.object({
-          id: z.number().int().positive(),
-          contractId: z.number().int().positive().nullable().optional(),
+          id: idSchema,
+          contractId: idSchema.nullable().optional(),
           tenantName: z.string().trim().max(255).optional(),
           tenantEmail: optionalEmail.nullable().optional(),
-          serviceFrom: z
-            .string()
-            .regex(/^\d{4}-\d{2}-\d{2}$/)
-            .optional(),
-          serviceTo: z
-            .string()
-            .regex(/^\d{4}-\d{2}-\d{2}$/)
-            .optional(),
-          amount: z.number().positive().max(999999999).optional(),
+          serviceFrom: isoDate.optional(),
+          serviceTo: isoDate.optional(),
+          amount: money.optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1746,16 +2003,37 @@ export const appRouter = router({
           "manageAccruals",
           "Недостаточно прав для изменения начислений"
         );
-        const rows = await listAccruals();
-        const target = rows.find(row => row.id === input.id);
-        if (!target) throw new Error("Начисление не найдено");
+        const { accrual: target } = await requireAccrualAccess(
+          ctx.user,
+          input.id
+        );
         if (target.status === "invoiced")
           throw new Error("Начисление в счёте нельзя изменять");
+        // Re-linking to another contract requires access to that contract too, and the contract
+        // must not already have an accrual for this period (no double billing).
         if (
-          input.serviceFrom &&
-          input.serviceTo &&
-          input.serviceFrom > input.serviceTo
-        )
+          input.contractId != null &&
+          input.contractId !== target.contractId
+        ) {
+          await requireContractById(ctx.user, input.contractId);
+          const clash = (await listAccruals(target.period)).find(
+            row => row.contractId === input.contractId && row.id !== target.id
+          );
+          if (clash)
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "У этого договора уже есть начисление за этот период",
+            });
+        }
+        // Unlinking: the row then belongs to the block of its own address — it must stay accessible.
+        if (input.contractId === null && target.contractId != null)
+          requireBlockAccess(
+            ctx.user,
+            deriveBlockFolder(target.propertyName, target.unitName, null)
+          );
+        const serviceFrom = input.serviceFrom ?? toDateOnly(target.serviceFrom);
+        const serviceTo = input.serviceTo ?? toDateOnly(target.serviceTo);
+        if (serviceFrom > serviceTo)
           throw new Error("Дата начала не может быть позже даты окончания");
         const patch = {
           ...(input.contractId !== undefined
@@ -1777,98 +2055,75 @@ export const appRouter = router({
             ? { amount: input.amount.toFixed(2), amountEdited: true }
             : {}),
         };
-        return updateAccrual(input.id, patch);
+        return updateDraftAccrual(target.id, patch);
       }),
     updateAmount: protectedProcedure
-      .input(
-        z.object({
-          id: z.number().int().positive(),
-          amount: z.number().positive().max(999999999),
-        })
-      )
+      .input(z.object({ id: idSchema, amount: money }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageAccruals",
           "Недостаточно прав для изменения начислений"
         );
-        const target = (await listAccruals()).find(row => row.id === input.id);
-        if (!target) throw new Error("Начисление не найдено");
+        const { accrual: target } = await requireAccrualAccess(
+          ctx.user,
+          input.id
+        );
         if (target.status === "invoiced")
           throw new Error("Начисление в счёте нельзя изменять");
-        return updateAccrual(input.id, {
+        return updateDraftAccrual(target.id, {
           amount: input.amount.toFixed(2),
           amountEdited: true,
         });
       }),
     updateEmail: protectedProcedure
-      .input(
-        z.object({
-          id: z.number().int().positive(),
-          tenantEmail: optionalEmail,
-        })
-      )
+      .input(z.object({ id: idSchema, tenantEmail: optionalEmail }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageAccruals",
           "Недостаточно прав для изменения начислений"
         );
-        const target = (await listAccruals()).find(row => row.id === input.id);
-        if (!target) throw new Error("Начисление не найдено");
+        const { accrual: target } = await requireAccrualAccess(
+          ctx.user,
+          input.id
+        );
         if (target.status === "invoiced")
           throw new Error("Начисление в счёте нельзя изменять");
-        return updateAccrual(input.id, {
+        return updateDraftAccrual(target.id, {
           tenantEmail: input.tenantEmail?.trim() || null,
         });
       }),
     remove: protectedProcedure
-      .input(z.object({ id: z.number().int().positive() }))
+      .input(z.object({ id: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageAccruals",
           "Недостаточно прав для удаления начислений"
         );
-        const target = (await listAccruals()).find(row => row.id === input.id);
-        if (!target) throw new Error("Начисление не найдено");
-        if (ctx.user.role !== "admin") {
-          if (target.contractId == null)
-            throw new Error(
-              "Бездоговорное начисление может удалить только Administrator"
-            );
-          const contract = await getContract(target.contractId);
-          if (!contract || contract.departmentId !== ctx.user.departmentId)
-            throw new Error("Нет доступа к начислению другого подразделения");
-        }
-        return deleteAccrual(input.id);
+        const { accrual: target } = await requireAccrualAccess(
+          ctx.user,
+          input.id
+        );
+        assertCanDeleteAccrual(ctx.user, target);
+        return deleteAccrual(target.id);
       }),
     removeMany: protectedProcedure
-      .input(
-        z.object({ ids: z.array(z.number().int().positive()).min(1).max(200) })
-      )
+      .input(z.object({ ids: z.array(idSchema).min(1).max(200) }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageAccruals",
           "Недостаточно прав для удаления начислений"
         );
-        const rows = await listAccruals();
-        const targets = rows.filter(row => input.ids.includes(row.id));
-        if (targets.length !== input.ids.length)
-          throw new Error("Одно или несколько начислений не найдены");
-        for (const target of targets) {
-          if (target.status === "invoiced")
-            throw new Error("Начисление в счёте нельзя удалить");
-          if (ctx.user.role !== "admin") {
-            if (target.contractId == null)
-              throw new Error(
-                "Бездоговорное начисление может удалить только Administrator"
-              );
-            const contract = await getContract(target.contractId);
-            if (!contract || contract.departmentId !== ctx.user.departmentId)
-              throw new Error("Нет доступа к начислению другого подразделения");
-          }
+        const ids = Array.from(new Set(input.ids));
+        // Every row is authorised before the first one is deleted.
+        const targets = [];
+        for (const id of ids) {
+          const { accrual } = await requireAccrualAccess(ctx.user, id);
+          assertCanDeleteAccrual(ctx.user, accrual);
+          targets.push(accrual);
         }
         for (const target of targets) await deleteAccrual(target.id);
         return { deleted: targets.length };
@@ -1885,12 +2140,9 @@ export const appRouter = router({
       .mutation(({ input }) => dbHelpers.clearDraftAccruals(input.period)),
   }),
   invoices: router({
-    list: protectedProcedure.query(async () => {
-      const rows = await listInvoices();
-      const contracts = await listContracts(true);
-      const contractById = new Map(
-        contracts.map(contract => [contract.id, contract])
-      );
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await filterInvoices(ctx.user, await listInvoices());
+      const scope = await loadScope(ctx.user);
       const accrualCache = new Map<
         string,
         Awaited<ReturnType<typeof listAccruals>>
@@ -1905,7 +2157,7 @@ export const appRouter = router({
         const items = await getInvoiceItems(invoice.id);
         const contract = items
           .map(item =>
-            contractById.get(
+            scope.contractById.get(
               accrualRows?.find(row => row.id === item.accrualId)?.contractId ??
                 -1
             )
@@ -1920,21 +2172,24 @@ export const appRouter = router({
       return enriched;
     }),
     bulkCreate: protectedProcedure
-      .input(z.object({ period: z.string().regex(/^\d{4}-\d{2}$/) }))
+      .input(z.object({ period: periodSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageInvoices",
           "Недостаточно прав для формирования счетов"
         );
-        const accrualRows = await listAccruals(input.period);
+        const scope = await loadScope(ctx.user);
+        // Only accruals of the caller's blocks are billed.
+        const accrualRows = (await listAccruals(input.period)).filter(row =>
+          scope.canAccrual(row)
+        );
         const draftRows = accrualRows.filter(row => row.status === "draft");
         if (!draftRows.length)
           return { created: [], skipped: accrualRows.length };
         const groups = new Map<string, typeof draftRows>();
         for (const row of draftRows) {
-          const contract =
-            row.contractId == null ? null : await getContract(row.contractId);
+          const contract = scope.contractOf(row);
           const tenant = contract?.tenantName?.trim() || row.tenantName?.trim();
           if (!tenant) continue;
           const group = groups.get(tenant) ?? [];
@@ -1942,62 +2197,41 @@ export const appRouter = router({
           groups.set(tenant, group);
         }
         const created = [];
-        let sequence = 0;
         for (const [tenantName, rows] of Array.from(groups.entries())) {
-          const total = rows.reduce(
-            (sum: number, row: (typeof rows)[number]) =>
-              sum + Number(row.amount),
-            0
-          );
-          const invoice = await createInvoice(
-            {
-              invoiceNumber: `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${++sequence}`,
-              issueDate: new Date(),
-              period: input.period,
-              tenantName,
-              totalAmount: total.toFixed(2),
-              status: "issued",
-            },
-            rows.map((row: (typeof rows)[number]) => ({
-              invoiceId: 0,
-              accrualId: row.id,
-              description: `Услуги проживания ${row.serviceFrom} — ${row.serviceTo}`,
-              amount: row.amount,
-            }))
-          );
-          await markAccrualsInvoiced(
-            rows.map((row: (typeof rows)[number]) => row.id)
-          );
-          created.push(invoice);
+          try {
+            const invoice = await createInvoiceWithNumber(
+              {
+                issueDate: new Date(),
+                period: input.period,
+                tenantName,
+                totalAmount: "0.00",
+                status: "issued",
+              },
+              rows.map(row => ({
+                invoiceId: 0,
+                accrualId: row.id,
+                description: `Услуги проживания ${toDateOnly(row.serviceFrom)} — ${toDateOnly(row.serviceTo)}`,
+                amount: row.amount,
+              }))
+            );
+            created.push(invoice);
+          } catch (error) {
+            // Another request billed these accruals first: skip the group, never bill twice.
+            if (error instanceof dbHelpers.AccrualsAlreadyInvoicedError)
+              continue;
+            throw error;
+          }
         }
         return { created, skipped: accrualRows.length - draftRows.length };
       }),
     previewEmail: protectedProcedure
-      .input(z.object({ invoiceId: z.number() }))
-      .query(async ({ input }) => {
-        const invoice = await getInvoice(input.invoiceId);
-        if (!invoice) throw new Error("Счёт не найден");
-        const items = await getInvoiceItems(invoice.id);
-        const accrualRows = await listAccruals(invoice.period);
-        const accrualById = new Map(accrualRows.map(row => [row.id, row]));
-        const allContracts = await listContracts(true);
-        const contractById = new Map(
-          allContracts.map(contract => [contract.id, contract])
+      .input(z.object({ invoiceId: idSchema }))
+      .query(async ({ input, ctx }) => {
+        const { invoice, items } = await requireInvoiceAccess(
+          ctx.user,
+          input.invoiceId
         );
-        const recipients = Array.from(
-          new Set(
-            items
-              .map(item => {
-                const accrual = accrualById.get(item.accrualId);
-                return accrual
-                  ? accrual.contractId == null
-                    ? accrual.tenantEmail?.trim()
-                    : contractById.get(accrual.contractId)?.tenantEmail?.trim()
-                  : undefined;
-              })
-              .filter((email): email is string => Boolean(email))
-          )
-        );
+        const recipients = await invoiceRecipients(items);
         const recipient = recipients[0] ?? null;
         const preview = buildInvoiceEmail({
           invoiceNumber: invoice.invoiceNumber,
@@ -2025,38 +2259,20 @@ export const appRouter = router({
                 : [],
         };
       }),
-    // No mail provider: the letter is opened in the user's own mail app (mailto:), then marked as sent here.
+    // No mail provider: the letter is opened in the user's own mail app, then marked as sent here.
     markEmailSent: protectedProcedure
-      .input(z.object({ invoiceId: z.number() }))
+      .input(z.object({ invoiceId: idSchema }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "manageInvoices",
           "Недостаточно прав для отправки счетов"
         );
-        const invoice = await getInvoice(input.invoiceId);
-        if (!invoice) throw new Error("Счёт не найден");
-        const items = await getInvoiceItems(invoice.id);
-        const accrualRows = await listAccruals(invoice.period);
-        const accrualById = new Map(accrualRows.map(row => [row.id, row]));
-        const allContracts = await listContracts(true);
-        const contractById = new Map(
-          allContracts.map(contract => [contract.id, contract])
+        const { invoice, items } = await requireInvoiceAccess(
+          ctx.user,
+          input.invoiceId
         );
-        const recipients = Array.from(
-          new Set(
-            items
-              .map(item => {
-                const accrual = accrualById.get(item.accrualId);
-                return accrual
-                  ? accrual.contractId == null
-                    ? accrual.tenantEmail?.trim()
-                    : contractById.get(accrual.contractId)?.tenantEmail?.trim()
-                  : undefined;
-              })
-              .filter((email): email is string => Boolean(email))
-          )
-        );
+        const recipients = await invoiceRecipients(items);
         if (!recipients.length)
           throw new Error("У плательщика не указан Email в договоре");
         if (recipients.length > 1)
@@ -2072,16 +2288,19 @@ export const appRouter = router({
         return { invoice: saved, recipient };
       }),
     previewExcel: protectedProcedure
-      .input(z.object({ period: z.string().regex(/^\d{4}-\d{2}$/) }))
-      .mutation(async ({ input }) => {
-        const accrualRows = await listAccruals(input.period);
-        const allContracts = await listContracts(true);
-        const contractById = new Map(
-          allContracts.map(contract => [contract.id, contract])
+      .input(z.object({ period: periodSchema }))
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageInvoices",
+          "Недостаточно прав для выгрузки"
+        );
+        const scope = await loadScope(ctx.user);
+        const accrualRows = (await listAccruals(input.period)).filter(row =>
+          scope.canAccrual(row)
         );
         const errors = accrualRows.flatMap(row => {
-          const contract =
-            row.contractId == null ? null : contractById.get(row.contractId);
+          const contract = scope.contractOf(row);
           const messages = [];
           if (!contract && row.contractId != null)
             messages.push("Связанный договор не найден");
@@ -2133,35 +2352,27 @@ export const appRouter = router({
     exportExcel: protectedProcedure
       .input(
         z.object({
-          period: z.string().regex(/^\d{4}-\d{2}$/),
+          period: periodSchema,
           blockFolder: z.string().trim().max(120).optional(),
         })
       )
-      .mutation(async ({ input }) => {
-        const allContracts = await listContracts(true);
-        const contractById = new Map(
-          allContracts.map(contract => [contract.id, contract])
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageInvoices",
+          "Недостаточно прав для выгрузки"
         );
-        const allAccrualRows = await listAccruals(input.period);
-        const accrualRows = input.blockFolder
-          ? allAccrualRows.filter(row => {
-              const contract =
-                row.contractId == null
-                  ? null
-                  : contractById.get(row.contractId);
-              return (
-                deriveBlockFolder(
-                  contract?.propertyName ?? row.propertyName,
-                  contract?.unitName ?? row.unitName,
-                  contract?.blockFolder
-                ) === input.blockFolder
-              );
-            })
-          : allAccrualRows;
+        if (input.blockFolder) requireBlockAccess(ctx.user, input.blockFolder);
+        const scope = await loadScope(ctx.user);
+        const accrualRows = (await listAccruals(input.period)).filter(
+          row =>
+            scope.canAccrual(row) &&
+            (!input.blockFolder || scope.blockOf(row) === input.blockFolder)
+        );
         const exported = await buildAccrualWorkbook(
           input.period,
           accrualRows,
-          allContracts
+          scope.visibleContracts
         );
         return {
           fileName:
@@ -2179,30 +2390,59 @@ export const appRouter = router({
         };
       }),
     items: protectedProcedure
-      .input(z.object({ invoiceId: z.number() }))
-      .query(({ input }) => getInvoiceItems(input.invoiceId)),
-    payments: protectedProcedure
-      .input(z.object({ invoiceId: z.number().optional() }).optional())
-      .query(({ input }) => dbHelpers.listPayments(input?.invoiceId)),
-    paymentAudit: protectedProcedure
-      .input(z.object({ invoiceId: z.number() }))
-      .query(({ input }) => dbHelpers.listPaymentAudit(input.invoiceId)),
-    previewPaymentImport: protectedProcedure
-      .input(z.object({ dataUrl: z.string().min(50) }))
-      .mutation(({ input }) => {
-        const base64 = input.dataUrl.split(",")[1];
-        if (!base64) throw new Error("Некорректный Excel-файл");
-        return parsePaymentsExcel(Buffer.from(base64, "base64"));
+      .input(z.object({ invoiceId: idSchema }))
+      .query(async ({ input, ctx }) => {
+        const { items } = await requireInvoiceAccess(ctx.user, input.invoiceId);
+        return items;
       }),
-    importPayments: protectedProcedure
-      .input(z.object({ rows: z.array(paymentImportRowInput).min(1) }))
+    payments: protectedProcedure
+      .input(z.object({ invoiceId: idSchema.optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        if (input?.invoiceId) {
+          await requireInvoiceAccess(ctx.user, input.invoiceId);
+          return dbHelpers.listPayments(input.invoiceId);
+        }
+        const rows = await dbHelpers.listPayments();
+        if (ctx.user.role === "admin") return rows;
+        const visible = new Set(
+          (await filterInvoices(ctx.user, await listInvoices())).map(
+            invoice => invoice.id
+          )
+        );
+        return rows.filter(row => visible.has(row.invoiceId));
+      }),
+    paymentAudit: protectedProcedure
+      .input(z.object({ invoiceId: idSchema }))
+      .query(async ({ input, ctx }) => {
+        await requireInvoiceAccess(ctx.user, input.invoiceId);
+        return dbHelpers.listPaymentAudit(input.invoiceId);
+      }),
+    previewPaymentImport: protectedProcedure
+      .input(z.object({ dataUrl: dataUrlSchema(LIMITS.spreadsheetBytes) }))
       .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "managePayments",
           "Недостаточно прав для импорта платежей"
         );
-        const invoices = await listInvoices();
+        await enforce(RULES.spreadsheetParse, rateKey("user", ctx.user.id));
+        const upload = decodeSpreadsheetUpload(input.dataUrl);
+        return parsePaymentsExcel(upload.buffer);
+      }),
+    importPayments: protectedProcedure
+      .input(
+        z.object({
+          rows: z.array(paymentImportRowInput).min(1).max(LIMITS.importRows),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "managePayments",
+          "Недостаточно прав для импорта платежей"
+        );
+        // Only invoices the caller may see can receive payments.
+        const invoices = await filterInvoices(ctx.user, await listInvoices());
         const imported = [];
         const errors = [];
         for (const row of input.rows) {
@@ -2218,6 +2458,7 @@ export const appRouter = router({
             });
             continue;
           }
+          // Fast path; the authoritative duplicate check runs again inside recordPayment's transaction.
           if (
             row.reference &&
             (await dbHelpers.findPaymentByReference(invoice.id, row.reference))
@@ -2245,10 +2486,7 @@ export const appRouter = router({
           } catch (error) {
             errors.push({
               invoiceNumber: row.invoiceNumber,
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Не удалось записать платёж",
+              message: publicErrorMessage(error, "Не удалось записать платёж"),
             });
           }
         }
@@ -2257,27 +2495,28 @@ export const appRouter = router({
     recordPayment: protectedProcedure
       .input(
         z.object({
-          invoiceId: z.number(),
-          amount: z.number().positive(),
-          paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          invoiceId: idSchema,
+          amount: money,
+          paidAt: isoDate,
           method: z.enum(["bank", "portal", "card", "cash", "other"]),
-          reference: z.string().max(255).optional(),
+          reference: z.string().trim().max(255).optional(),
           note: z.string().max(2000).optional(),
         })
       )
-      .mutation(({ input, ctx }) => {
+      .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "managePayments",
           "Недостаточно прав для записи платежей"
         );
+        await requireInvoiceAccess(ctx.user, input.invoiceId);
         return dbHelpers.recordPayment(
           {
             invoiceId: input.invoiceId,
             amount: input.amount.toFixed(2),
             paidAt: new Date(`${input.paidAt}T00:00:00Z`),
             method: input.method,
-            reference: input.reference ?? null,
+            reference: input.reference || null,
             note: input.note ?? null,
           },
           ctx.user.id
@@ -2286,27 +2525,38 @@ export const appRouter = router({
     reversePayment: protectedProcedure
       .input(
         z.object({
-          paymentId: z.number(),
+          paymentId: idSchema,
           note: z.string().max(2000).optional(),
         })
       )
-      .mutation(({ input, ctx }) =>
-        dbHelpers.reversePayment(input.paymentId, ctx.user.id, input.note)
-      ),
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "managePayments",
+          "Недостаточно прав для отмены платежей"
+        );
+        await requirePaymentAccess(ctx.user, input.paymentId);
+        return dbHelpers.reversePayment(
+          input.paymentId,
+          ctx.user.id,
+          input.note
+        );
+      }),
     refreshPaymentStatus: protectedProcedure
-      .input(z.object({ invoiceId: z.number() }))
-      .mutation(({ input, ctx }) => {
+      .input(z.object({ invoiceId: idSchema }))
+      .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "managePayments",
           "Недостаточно прав для обновления статуса платежа"
         );
+        await requireInvoiceAccess(ctx.user, input.invoiceId);
         return dbHelpers.recalculateInvoicePaymentStatus(input.invoiceId);
       }),
     updatePaymentStatus: protectedProcedure
       .input(
         z.object({
-          invoiceId: z.number(),
+          invoiceId: idSchema,
           paymentStatus: z.enum([
             "issued",
             "partially_paid",
@@ -2318,12 +2568,13 @@ export const appRouter = router({
           note: z.string().max(2000).optional(),
         })
       )
-      .mutation(({ input, ctx }) => {
+      .mutation(async ({ input, ctx }) => {
         assertPermission(
           ctx.user.role,
           "managePayments",
           "Недостаточно прав для изменения статуса платежа"
         );
+        await requireInvoiceAccess(ctx.user, input.invoiceId);
         return dbHelpers.updateInvoicePaymentStatus(
           input.invoiceId,
           input.paymentStatus,
@@ -2334,9 +2585,9 @@ export const appRouter = router({
     create: protectedProcedure
       .input(
         z.object({
-          period: z.string(),
-          tenantName: z.string().min(1),
-          accrualIds: z.array(z.number()).min(1),
+          period: periodSchema,
+          tenantName: z.string().trim().min(1).max(255),
+          accrualIds: z.array(idSchema).min(1).max(LIMITS.bulkIds),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -2345,21 +2596,28 @@ export const appRouter = router({
           "manageInvoices",
           "Недостаточно прав для создания счета"
         );
+        const ids = Array.from(new Set(input.accrualIds));
+        const scope = await loadScope(ctx.user);
         const rows = await listAccruals(input.period);
-        const selected = rows.filter(row => input.accrualIds.includes(row.id));
-        if (!selected.length)
-          throw new Error("Выберите хотя бы одно начисление");
-        const selectedContracts = await Promise.all(
-          selected.map(row =>
-            row.contractId == null
-              ? Promise.resolve(null)
-              : getContract(row.contractId)
-          )
-        );
+        const selected = rows.filter(row => ids.includes(row.id));
+        // Every requested accrual must exist in this period, be visible to the caller and be a draft.
+        if (selected.length !== ids.length)
+          throw new Error(
+            "Некоторые начисления не найдены в выбранном периоде"
+          );
+        if (selected.some(row => !scope.canAccrual(row)))
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Нет доступа к начислению: блок не назначен менеджеру",
+          });
+        if (selected.some(row => row.status !== "draft"))
+          throw new Error("Часть начислений уже включена в счёт");
         const tenantNames = Array.from(
           new Set(
-            selectedContracts
-              .map(contract => contract?.tenantName)
+            selected
+              .map(row =>
+                (scope.contractOf(row)?.tenantName ?? row.tenantName)?.trim()
+              )
               .filter(Boolean)
           )
         );
@@ -2371,29 +2629,27 @@ export const appRouter = router({
           throw new Error(
             "Имя плательщика не совпадает с выбранными начислениями"
           );
-        const total = selected.reduce(
-          (sum, row) => sum + Number(row.amount),
-          0
-        );
-        const number = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
-        const invoice = await createInvoice(
-          {
-            invoiceNumber: number,
-            issueDate: new Date(),
-            period: input.period,
-            tenantName: tenantNames[0],
-            totalAmount: total.toFixed(2),
-            status: "issued",
-          },
-          selected.map(row => ({
-            invoiceId: 0,
-            accrualId: row.id,
-            description: `Услуги проживания ${row.serviceFrom} — ${row.serviceTo}`,
-            amount: row.amount,
-          }))
-        );
-        await markAccrualsInvoiced(selected.map(row => row.id));
-        return invoice;
+        try {
+          return await createInvoiceWithNumber(
+            {
+              issueDate: new Date(),
+              period: input.period,
+              tenantName: tenantNames[0]!,
+              totalAmount: "0.00",
+              status: "issued",
+            },
+            selected.map(row => ({
+              invoiceId: 0,
+              accrualId: row.id,
+              description: `Услуги проживания ${toDateOnly(row.serviceFrom)} — ${toDateOnly(row.serviceTo)}`,
+              amount: row.amount,
+            }))
+          );
+        } catch (error) {
+          if (error instanceof dbHelpers.AccrualsAlreadyInvoicedError)
+            throw new TRPCError({ code: "CONFLICT", message: error.message });
+          throw error;
+        }
       }),
   }),
 });

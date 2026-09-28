@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   users,
@@ -57,18 +57,28 @@ export async function createContractFolder(name: string) {
 export async function renameContractFolder(
   id: number,
   name: string,
-  oldName: string
+  _clientOldName?: string
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  await db
-    .update(contractFolders)
-    .set({ name: name.trim() })
-    .where(eq(contractFolders.id, id));
-  await db
-    .update(contracts)
-    .set({ blockFolder: name.trim() })
-    .where(eq(contracts.blockFolder, oldName));
+  // The old name comes from the database, not from the request: a forged "oldName" must not
+  // move contracts out of an unrelated folder.
+  await db.transaction(async tx => {
+    const [folder] = await tx
+      .select()
+      .from(contractFolders)
+      .where(eq(contractFolders.id, id))
+      .for("update");
+    if (!folder) throw new Error("Папка не найдена");
+    await tx
+      .update(contractFolders)
+      .set({ name: name.trim() })
+      .where(eq(contractFolders.id, id));
+    await tx
+      .update(contracts)
+      .set({ blockFolder: name.trim() })
+      .where(eq(contracts.blockFolder, folder.name));
+  });
   return { id, name: name.trim() };
 }
 export async function deleteContractFolder(id: number) {
@@ -169,7 +179,22 @@ export async function permanentlyDeleteContract(id: number) {
     .select({ id: accruals.id })
     .from(accruals)
     .where(eq(accruals.contractId, id));
-  for (const accrual of linkedAccruals) {
+  // Financial history is never destroyed: a contract whose accruals are billed cannot be deleted.
+  if (linkedAccruals.length) {
+    const billed = await db
+      .select({ id: invoiceItems.id })
+      .from(invoiceItems)
+      .where(
+        inArray(
+          invoiceItems.accrualId,
+          linkedAccruals.map(row => row.id)
+        )
+      )
+      .limit(1);
+    if (billed.length)
+      throw new Error(
+        "Договор нельзя удалить окончательно: по нему выставлены счета"
+      );
   }
   const linkedDocuments = await db
     .select({ id: documents.id })
@@ -253,16 +278,14 @@ export async function archiveExpiredContracts(
       .update(contracts)
       .set({ archivedAt: new Date() })
       .where(eq(contracts.id, contract.id));
-    await db
-      .insert(contractAuditLog)
-      .values({
-        contractId: contract.id,
-        actorUserId: null,
-        action: "updated",
-        details: contract.terminationDate
-          ? "Автоматическое архивирование после досрочного расторжения"
-          : "Автоматическое архивирование по дате окончания",
-      });
+    await db.insert(contractAuditLog).values({
+      contractId: contract.id,
+      actorUserId: null,
+      action: "updated",
+      details: contract.terminationDate
+        ? "Автоматическое архивирование после досрочного расторжения"
+        : "Автоматическое архивирование по дате окончания",
+    });
   }
   return {
     archived: expired.length,
@@ -593,8 +616,33 @@ export async function deleteAccrual(id: number) {
     .limit(1);
   if (linked.length)
     throw new Error("Начисление связано со счётом и не может быть удалено");
-  await db.delete(accruals).where(eq(accruals.id, id));
+  // Conditional delete: if the accrual was invoiced in the meantime, nothing is removed.
+  const result = await db
+    .delete(accruals)
+    .where(and(eq(accruals.id, id), eq(accruals.status, "draft")));
+  if (Number((result as any)[0]?.affectedRows ?? 1) === 0)
+    throw new Error("Начисление в счёте нельзя удалять");
   return row;
+}
+/** Edits an accrual only while it is still a draft (atomic with respect to invoicing). */
+export async function updateDraftAccrual(
+  id: number,
+  input: Partial<typeof accruals.$inferInsert>
+) {
+  const db = await getDb();
+  if (!db) throw new Error("База данных недоступна");
+  const result = await db
+    .update(accruals)
+    .set(input)
+    .where(and(eq(accruals.id, id), eq(accruals.status, "draft")));
+  if (Number((result as any)[0]?.affectedRows ?? 1) === 0)
+    throw new Error("Начисление в счёте нельзя изменять");
+  const rows = await db
+    .select()
+    .from(accruals)
+    .where(eq(accruals.id, id))
+    .limit(1);
+  return rows[0];
 }
 export async function clearDraftAccruals(period?: string) {
   const db = await getDb();
@@ -617,7 +665,13 @@ export async function clearDraftAccruals(period?: string) {
       skipped++;
       continue;
     }
-    await db.delete(accruals).where(eq(accruals.id, row.id));
+    const result = await db
+      .delete(accruals)
+      .where(and(eq(accruals.id, row.id), eq(accruals.status, "draft")));
+    if (Number((result as any)[0]?.affectedRows ?? 1) === 0) {
+      skipped++;
+      continue;
+    }
     deleted++;
   }
   return { deleted, skipped, requested: candidates.length };
@@ -690,16 +744,31 @@ export async function listPaymentAudit(invoiceId: number) {
     .where(eq(paymentAudit.invoiceId, invoiceId))
     .orderBy(desc(paymentAudit.createdAt));
 }
-export async function recalculateInvoicePaymentStatus(invoiceId: number) {
-  const invoice = await getInvoice(invoiceId);
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type Executor = Db | Tx;
+
+const toCents = (value: unknown) => Math.round(Number(value) * 100);
+
+/** Payment status derived from posted payments; runs inside the caller's transaction. */
+async function recalculateStatusWith(ex: Executor, invoiceId: number) {
+  const [invoice] = await ex
+    .select()
+    .from(invoices)
+    .where(eq(invoices.id, invoiceId))
+    .limit(1);
   if (!invoice) throw new Error("Счёт не найден");
-  const rows = await listPayments(invoiceId);
-  const paid = rows
-    .filter(row => row.status === "posted")
-    .reduce((sum, row) => sum + Number(row.amount), 0);
-  const total = Number(invoice.totalAmount);
+  const [{ paidCents }] = await ex
+    .select({
+      paidCents: sql<string>`coalesce(sum(round(${payments.amount} * 100)), 0)`,
+    })
+    .from(payments)
+    .where(
+      and(eq(payments.invoiceId, invoiceId), eq(payments.status, "posted"))
+    );
+  const paid = Number(paidCents);
+  const total = toCents(invoice.totalAmount);
   const due = invoice.dueDate ? new Date(invoice.dueDate) : null;
-  const now = new Date();
   const paymentStatus =
     invoice.status === "cancelled"
       ? "cancelled"
@@ -707,50 +776,91 @@ export async function recalculateInvoicePaymentStatus(invoiceId: number) {
         ? "paid"
         : paid > 0
           ? "partially_paid"
-          : due && due < now
+          : due && due < new Date()
             ? "overdue"
             : "issued";
-  const db = await getDb();
-  if (!db) throw new Error("База данных недоступна");
-  await db
+  await ex
     .update(invoices)
     .set({ paymentStatus })
     .where(eq(invoices.id, invoiceId));
   return {
-    invoice: await getInvoice(invoiceId),
-    paidAmount: paid,
-    outstandingAmount: Math.max(0, total - paid),
+    invoice: { ...invoice, paymentStatus },
+    paidAmount: paid / 100,
+    outstandingAmount: Math.max(0, total - paid) / 100,
   };
 }
+
+export async function recalculateInvoicePaymentStatus(invoiceId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("База данных недоступна");
+  return db.transaction(async tx => {
+    await tx
+      .select({ id: invoices.id })
+      .from(invoices)
+      .where(eq(invoices.id, invoiceId))
+      .for("update");
+    return recalculateStatusWith(tx, invoiceId);
+  });
+}
+
+/**
+ * Records a payment atomically: the invoice row is locked (SELECT … FOR UPDATE), so two concurrent
+ * payments are serialised and the second one sees the first — an invoice can never be overpaid.
+ */
 export async function recordPayment(
   input: typeof payments.$inferInsert,
   actorUserId: number
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const invoice = await getInvoice(input.invoiceId);
-  if (!invoice) throw new Error("Счёт не найден");
-  const current = await recalculateInvoicePaymentStatus(input.invoiceId);
-  if (
-    Number(input.amount) <= 0 ||
-    Number(input.amount) > current.outstandingAmount + 0.005
-  )
-    throw new Error("Сумма платежа превышает остаток по счёту");
-  const result = await db
-    .insert(payments)
-    .values({ ...input, createdBy: actorUserId, status: "posted" });
-  const paymentId = Number(result[0].insertId);
-  await db
-    .insert(paymentAudit)
-    .values({
-      paymentId,
+  const amountCents = toCents(input.amount);
+  if (!Number.isFinite(amountCents) || amountCents <= 0)
+    throw new Error("Сумма платежа должна быть больше нуля");
+  const paymentId = await db.transaction(async tx => {
+    const [invoice] = await tx
+      .select()
+      .from(invoices)
+      .where(eq(invoices.id, input.invoiceId))
+      .for("update");
+    if (!invoice) throw new Error("Счёт не найден");
+    if (invoice.status === "cancelled" || invoice.paymentStatus === "cancelled")
+      throw new Error("Счёт отменён: платежи по нему не принимаются");
+    if (input.reference) {
+      const [duplicate] = await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(
+          and(
+            eq(payments.invoiceId, input.invoiceId),
+            eq(payments.reference, input.reference),
+            eq(payments.status, "posted")
+          )
+        )
+        .limit(1);
+      if (duplicate)
+        throw new Error("Платёж с таким номером транзакции уже записан");
+    }
+    const current = await recalculateStatusWith(tx, input.invoiceId);
+    if (amountCents > Math.round(current.outstandingAmount * 100))
+      throw new Error("Сумма платежа превышает остаток по счёту");
+    const result = await tx.insert(payments).values({
+      ...input,
+      amount: (amountCents / 100).toFixed(2),
+      createdBy: actorUserId,
+      status: "posted",
+    });
+    const id = Number(result[0].insertId);
+    await tx.insert(paymentAudit).values({
+      paymentId: id,
       invoiceId: input.invoiceId,
       action: "recorded",
-      amount: input.amount,
+      amount: (amountCents / 100).toFixed(2),
       actorUserId,
       note: input.note ?? null,
     });
-  await recalculateInvoicePaymentStatus(input.invoiceId);
+    await recalculateStatusWith(tx, input.invoiceId);
+    return id;
+  });
   const rows = await db
     .select()
     .from(payments)
@@ -758,6 +868,19 @@ export async function recordPayment(
     .limit(1);
   return rows[0];
 }
+
+export async function getPayment(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.id, id))
+    .limit(1);
+  return rows[0];
+}
+
+/** Reverses a payment once: the status flip is conditional, so a replayed request changes nothing. */
 export async function reversePayment(
   paymentId: number,
   actorUserId: number,
@@ -765,21 +888,26 @@ export async function reversePayment(
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const rows = await db
-    .select()
-    .from(payments)
-    .where(eq(payments.id, paymentId))
-    .limit(1);
-  const payment = rows[0];
-  if (!payment) throw new Error("Платёж не найден");
-  if (payment.status === "reversed") throw new Error("Платёж уже отменён");
-  await db
-    .update(payments)
-    .set({ status: "reversed" })
-    .where(eq(payments.id, paymentId));
-  await db
-    .insert(paymentAudit)
-    .values({
+  return db.transaction(async tx => {
+    const [payment] = await tx
+      .select()
+      .from(payments)
+      .where(eq(payments.id, paymentId))
+      .for("update");
+    if (!payment) throw new Error("Платёж не найден");
+    if (payment.status === "reversed") throw new Error("Платёж уже отменён");
+    await tx
+      .select({ id: invoices.id })
+      .from(invoices)
+      .where(eq(invoices.id, payment.invoiceId))
+      .for("update");
+    const result = await tx
+      .update(payments)
+      .set({ status: "reversed" })
+      .where(and(eq(payments.id, paymentId), eq(payments.status, "posted")));
+    if (Number((result as any)[0]?.affectedRows ?? 0) !== 1)
+      throw new Error("Платёж уже отменён");
+    await tx.insert(paymentAudit).values({
       paymentId,
       invoiceId: payment.invoiceId,
       action: "reversed",
@@ -787,8 +915,10 @@ export async function reversePayment(
       actorUserId,
       note: note ?? null,
     });
-  return recalculateInvoicePaymentStatus(payment.invoiceId);
+    return recalculateStatusWith(tx, payment.invoiceId);
+  });
 }
+
 export async function updateInvoicePaymentStatus(
   id: number,
   paymentStatus: typeof invoices.$inferInsert.paymentStatus,
@@ -797,42 +927,125 @@ export async function updateInvoicePaymentStatus(
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const invoice = await getInvoice(id);
-  if (!invoice) throw new Error("Счёт не найден");
-  const previousStatus = invoice.paymentStatus;
-  await db.update(invoices).set({ paymentStatus }).where(eq(invoices.id, id));
-  await db
-    .insert(paymentAudit)
-    .values({
+  await db.transaction(async tx => {
+    const [invoice] = await tx
+      .select()
+      .from(invoices)
+      .where(eq(invoices.id, id))
+      .for("update");
+    if (!invoice) throw new Error("Счёт не найден");
+    await tx.update(invoices).set({ paymentStatus }).where(eq(invoices.id, id));
+    await tx.insert(paymentAudit).values({
       paymentId: null,
       invoiceId: id,
       action: "status_changed",
       amount: "0.00",
-      previousStatus,
+      previousStatus: invoice.paymentStatus,
       newStatus: paymentStatus,
       actorUserId,
       note: note ?? null,
     });
+  });
   return getInvoice(id);
 }
+
+export class AccrualsAlreadyInvoicedError extends Error {
+  constructor() {
+    super("Часть начислений уже включена в другой счёт — обновите страницу");
+    this.name = "AccrualsAlreadyInvoicedError";
+  }
+}
+
+/**
+ * Creates an invoice from draft accruals atomically. The accrual rows are locked, must all still be
+ * drafts that are not part of any invoice, and are switched to "invoiced" in the same transaction —
+ * so concurrent requests cannot put one accrual into two invoices.
+ */
 export async function createInvoice(
   input: typeof invoices.$inferInsert,
   items: Array<typeof invoiceItems.$inferInsert>
 ) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const result = await db.insert(invoices).values(input);
-  const invoiceId = Number(result[0].insertId);
-  if (items.length)
-    await db
-      .insert(invoiceItems)
-      .values(items.map(item => ({ ...item, invoiceId })));
+  const accrualIds = Array.from(new Set(items.map(item => item.accrualId)));
+  const invoiceId = await db.transaction(async tx => {
+    if (accrualIds.length) {
+      const locked = await tx
+        .select({
+          id: accruals.id,
+          status: accruals.status,
+          amount: accruals.amount,
+        })
+        .from(accruals)
+        .where(inArray(accruals.id, accrualIds))
+        .for("update");
+      if (
+        locked.length !== accrualIds.length ||
+        locked.some(row => row.status !== "draft")
+      )
+        throw new AccrualsAlreadyInvoicedError();
+      const linked = await tx
+        .select({ id: invoiceItems.id })
+        .from(invoiceItems)
+        .where(inArray(invoiceItems.accrualId, accrualIds))
+        .limit(1);
+      if (linked.length) throw new AccrualsAlreadyInvoicedError();
+      // Line amounts and the total come from the locked rows, never from the caller.
+      const lockedAmount = new Map(locked.map(row => [row.id, row.amount]));
+      items = items.map(item => ({
+        ...item,
+        amount: lockedAmount.get(item.accrualId)!,
+      }));
+      const totalCents = locked.reduce(
+        (sum, row) => sum + toCents(row.amount),
+        0
+      );
+      input = { ...input, totalAmount: (totalCents / 100).toFixed(2) };
+    }
+    const result = await tx.insert(invoices).values(input);
+    const id = Number(result[0].insertId);
+    if (items.length)
+      await tx
+        .insert(invoiceItems)
+        .values(items.map(item => ({ ...item, invoiceId: id })));
+    if (accrualIds.length) {
+      const updated = await tx
+        .update(accruals)
+        .set({ status: "invoiced" })
+        .where(
+          and(inArray(accruals.id, accrualIds), eq(accruals.status, "draft"))
+        );
+      if (Number((updated as any)[0]?.affectedRows ?? 0) !== accrualIds.length)
+        throw new AccrualsAlreadyInvoicedError();
+    }
+    return id;
+  });
   const rows = await db
     .select()
     .from(invoices)
     .where(eq(invoices.id, invoiceId))
     .limit(1);
   return rows[0];
+}
+
+export async function getAccrual(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(accruals)
+    .where(eq(accruals.id, id))
+    .limit(1);
+  return rows[0];
+}
+export async function listAccrualsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || !ids.length) return [];
+  return db.select().from(accruals).where(inArray(accruals.id, ids));
+}
+export async function listAllInvoiceItems() {
+  const db = await getDb();
+  return db ? db.select().from(invoiceItems) : [];
 }
 
 export async function listPermanentlyDeletableContractIds() {
@@ -886,22 +1099,20 @@ export async function createLocalUser(input: {
 }) {
   const db = await getDb();
   if (!db) throw new Error("База данных недоступна");
-  const result = await db
-    .insert(users)
-    .values({
-      name: input.name,
-      email: input.email,
-      emailNormalized: input.emailNormalized,
-      passwordHash: input.passwordHash ?? null,
-      accountStatus: input.accountStatus ?? "pending",
-      loginMethod: "local",
-      role: input.role,
-      departmentId: input.departmentId ?? null,
-      managedBlocks: input.managedBlocks ?? null,
-      mustChangePassword: input.mustChangePassword ?? false,
-      temporaryPasswordExpiresAt: input.temporaryPasswordExpiresAt ?? null,
-      passwordChangedAt: input.passwordHash ? new Date() : null,
-    });
+  const result = await db.insert(users).values({
+    name: input.name,
+    email: input.email,
+    emailNormalized: input.emailNormalized,
+    passwordHash: input.passwordHash ?? null,
+    accountStatus: input.accountStatus ?? "pending",
+    loginMethod: "local",
+    role: input.role,
+    departmentId: input.departmentId ?? null,
+    managedBlocks: input.managedBlocks ?? null,
+    mustChangePassword: input.mustChangePassword ?? false,
+    temporaryPasswordExpiresAt: input.temporaryPasswordExpiresAt ?? null,
+    passwordChangedAt: input.passwordHash ? new Date() : null,
+  });
   const rows = await db
     .select()
     .from(users)
@@ -949,6 +1160,13 @@ export async function updateAuthSessionSeen(id: number) {
     .update(authSessions)
     .set({ lastSeenAt: new Date() })
     .where(eq(authSessions.id, id));
+}
+export async function purgeExpiredAuthSessions(before = new Date()) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(authSessions)
+    .where(sql`${authSessions.expiresAt} < ${before}`);
 }
 export async function revokeAuthSession(tokenHash: string) {
   const db = await getDb();

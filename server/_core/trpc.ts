@@ -2,9 +2,23 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { clientSafeMessage } from "../security/http";
+
+const isDev = process.env.NODE_ENV !== "production";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  isDev,
+  // Production clients never receive stack traces, SQL or driver messages (they are logged instead).
+  errorFormatter({ shape, error }) {
+    // Evaluated per error (not at import) so tests and runtime agree on the environment.
+    const { stack, ...data } = shape.data;
+    return {
+      ...shape,
+      message: clientSafeMessage(error.code, error.message, error.cause),
+      data: process.env.NODE_ENV !== "production" ? { ...data, stack } : data,
+    };
+  },
 });
 
 export const router = t.router;

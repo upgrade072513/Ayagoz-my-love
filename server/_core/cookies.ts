@@ -43,6 +43,7 @@ export function getSessionCookieOptions(
     httpOnly: true,
     path: "/",
     sameSite: "lax",
-    secure: isSecureRequest(req),
+    // Production always runs behind HTTPS (Railway): the session cookie is never sent in clear text.
+    secure: process.env.NODE_ENV === "production" ? true : isSecureRequest(req),
   };
 }

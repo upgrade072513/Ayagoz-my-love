@@ -21,6 +21,11 @@ const mocks = vi.hoisted(() => ({
   listAccruals: vi.fn(async () => [
     { id: 10, contractId: 7, period: "2026-08" },
   ]),
+  listAccrualsByIds: vi.fn(async (ids: number[]) =>
+    [{ id: 10, contractId: 7, period: "2026-08" }].filter(row =>
+      ids.includes(row.id)
+    )
+  ),
   listContracts: vi.fn(async () => [
     { id: 7, tenantEmail: "buyer@example.com" },
   ]),

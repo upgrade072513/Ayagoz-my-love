@@ -21,13 +21,7 @@ export async function archiveExpiredContractsHandler(
     const result = await archiveExpiredContracts();
     return res.json({ ok: true, ...result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return res
-      .status(500)
-      .json({
-        error: message,
-        stack: error instanceof Error ? error.stack : undefined,
-        timestamp: new Date().toISOString(),
-      });
+    console.error("[scheduled] archive-expired-contracts failed:", error);
+    return res.status(500).json({ error: "internal error" });
   }
 }

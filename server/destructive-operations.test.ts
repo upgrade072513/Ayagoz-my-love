@@ -6,7 +6,14 @@ const mocks = vi.hoisted(() => ({
     { id: 11, contractId: null, status: "draft" },
   ]),
   getContract: vi.fn(async (id: number) =>
-    id === 7 ? { id: 7, departmentId: 3 } : undefined
+    id === 7 ? { id: 7, departmentId: 3, blockFolder: "Блок А1" } : undefined
+  ),
+  getAccrual: vi.fn(async (id: number) =>
+    id === 10
+      ? { id: 10, contractId: 7, status: "draft" }
+      : id === 11
+        ? { id: 11, contractId: null, status: "draft", propertyName: "Блок 38" }
+        : undefined
   ),
   deleteAccrual: vi.fn(async (id: number) => ({ id, status: "draft" })),
   clearDraftAccruals: vi.fn(async () => ({
@@ -68,10 +75,12 @@ import { appRouter } from "./routers";
 const caller = (user: any) =>
   appRouter.createCaller({ user, req: {}, res: {} } as any);
 
+// Managers are scoped by assigned blocks (not by department).
 const manager = (departmentId: number) => ({
   id: 2,
   role: "manager",
   departmentId,
+  managedBlocks: JSON.stringify(departmentId === 3 ? ["Блок А1"] : ["Блок А4"]),
 });
 
 describe("protected accrual deletion", () => {
@@ -79,15 +88,15 @@ describe("protected accrual deletion", () => {
     mocks.deleteAccrual.mockClear();
     mocks.clearDraftAccruals.mockClear();
   });
-  it("allows a Manager to delete a draft accrual in the same department", async () => {
+  it("allows a Manager to delete a draft accrual in an assigned block", async () => {
     await caller(manager(3)).accruals.remove({ id: 10 });
     expect(mocks.deleteAccrual).toHaveBeenCalledWith(10);
   });
 
-  it("rejects a Manager deleting another department's accrual", async () => {
+  it("rejects a Manager deleting an accrual of another block", async () => {
     await expect(
       caller(manager(9)).accruals.remove({ id: 10 })
-    ).rejects.toThrow("Нет доступа к начислению другого подразделения");
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(mocks.deleteAccrual).not.toHaveBeenCalledWith(10);
   });
 

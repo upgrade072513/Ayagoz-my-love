@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import { excelSerialToIso, readFirstSheetMatrix } from "./security/spreadsheet";
 
 export type ImportContractRow = {
   contractNumber?: string;
@@ -99,9 +99,8 @@ const excelDate = (value: unknown): string => {
   if (value instanceof Date && !Number.isNaN(value.getTime()))
     return value.toISOString().slice(0, 10);
   if (typeof value === "number") {
-    const date = XLSX.SSF.parse_date_code(value);
-    if (date)
-      return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}`;
+    const date = excelSerialToIso(value);
+    if (date) return date;
   }
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -135,17 +134,12 @@ const status = (value: unknown): "active" | "paused" | "ended" => {
   return "active";
 };
 
-export function parseContractsExcel(
+export async function parseContractsExcel(
   buffer: Buffer,
   customMapping?: Partial<Record<keyof ImportContractRow, number>>
 ) {
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) throw new Error("В Excel-файле нет листов");
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    defval: "",
-  });
+  const matrix = await readFirstSheetMatrix(buffer);
+  if (!matrix.length) throw new Error("В Excel-файле нет данных");
   const headers = (matrix[0] ?? []).map(normalizeHeader);
   const mapping: Partial<Record<keyof ImportContractRow, number>> =
     customMapping ?? {};

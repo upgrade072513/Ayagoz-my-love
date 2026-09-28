@@ -14,8 +14,6 @@ import {
   authenticateLocalRequest,
   hashPassword,
   normalizeEmail,
-  recordFailedLogin,
-  assertLoginRateLimit,
   verifyPassword,
 } from "./localAuth";
 
@@ -73,15 +71,19 @@ describe("local authentication security", () => {
     ).toBeNull();
   });
 
-  it("applies a bounded login rate limit with a neutral error", () => {
-    const email = `rate-${Date.now()}@example.com`;
-    const req = request();
-    for (let index = 0; index < 8; index += 1) {
-      assertLoginRateLimit(req, email);
-      recordFailedLogin(req, email);
-    }
-    expect(() => assertLoginRateLimit(req, email)).toThrow(
-      "Неверный Email или пароль"
+  it("applies a bounded login rate limit (shared limiter, per account + IP)", async () => {
+    const { consume, rateKey, RULES } = await import("./security/rateLimit");
+    const key = rateKey(
+      "ip-email",
+      "203.0.113.9",
+      `rate-${Date.now()}@example.com`
+    );
+    for (let index = 0; index < RULES.loginPerAccountAndIp.limit; index += 1)
+      expect((await consume(RULES.loginPerAccountAndIp, key)).allowed).toBe(
+        true
+      );
+    expect((await consume(RULES.loginPerAccountAndIp, key)).allowed).toBe(
+      false
     );
   });
 });

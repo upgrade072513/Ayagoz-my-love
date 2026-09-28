@@ -162,6 +162,20 @@
       "when": 1790263762519,
       "tag": "0022_drop_manus_openid",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1790573603224,
+      "tag": "0023_security_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1790575369566,
+      "tag": "0024_accrual_contract_period_unique",
+      "breakpoints": true
     }
   ]
 }

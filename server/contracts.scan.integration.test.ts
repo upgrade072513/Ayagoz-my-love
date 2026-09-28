@@ -55,7 +55,13 @@ vi.mock("./db", () => ({
 import { appRouter } from "./routers";
 
 const ctx = { user: { id: 1, role: "admin" }, req: {}, res: {} } as any;
-const dataUrl = `data:image/png;base64,${"A".repeat(80)}`;
+// A real (1×1) PNG: uploads are now checked by their magic bytes, not by the declared type.
+const dataUrl =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+const pdfDataUrl =
+  "data:application/pdf;base64," +
+  Buffer.from("%PDF-1.4\n%test scan\n").toString("base64");
 
 describe("contracts scan OCR", () => {
   beforeEach(() => {
@@ -96,7 +102,7 @@ describe("contracts scan OCR", () => {
     );
     const caller = appRouter.createCaller(ctx);
     const result = await caller.contracts.previewScan({
-      dataUrl,
+      dataUrl: pdfDataUrl,
       fileName: "№ 0475-2026/08-23 от 01.09.2026.pdf",
       mimeType: "application/pdf",
     });
@@ -142,6 +148,21 @@ describe("contracts scan OCR", () => {
     expect(result.warnings).toContain(
       "Не удалось уверенно прочитать даты и ставку"
     );
+  });
+
+  it("rejects a file whose content does not match the declared type", async () => {
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.contracts.previewScan({ dataUrl, mimeType: "application/pdf" })
+    ).rejects.toThrow(/не совпадает/);
+    await expect(
+      caller.contracts.previewScan({
+        dataUrl:
+          "data:image/png;base64," +
+          Buffer.from("<html><script>alert(1)</script>").toString("base64"),
+        mimeType: "image/png",
+      })
+    ).rejects.toThrow(/Неподдерживаемый тип файла/);
   });
 
   it("rejects unsupported scan MIME types before calling OCR", async () => {
@@ -209,13 +230,13 @@ describe("contracts scan OCR", () => {
 
   it("fills number and date from the file name when no recognition service is connected", async () => {
     vi.stubEnv("BUILT_IN_FORGE_API_URL", "");
-    const result = await appRouter
-      .createCaller(ctx)
-      .contracts.previewScan({
-        dataUrl: "data:application/pdf;base64," + "A".repeat(60),
-        mimeType: "application/pdf",
-        fileName: "12-A от 01.02.2026.pdf",
-      });
+    const result = await appRouter.createCaller(ctx).contracts.previewScan({
+      dataUrl:
+        "data:application/pdf;base64," +
+        Buffer.from("%PDF-1.4\n%test scan\n").toString("base64"),
+      mimeType: "application/pdf",
+      fileName: "12-A от 01.02.2026.pdf",
+    });
     expect(result).toMatchObject({
       contractNumber: "12-A",
       contractDate: "2026-02-01",

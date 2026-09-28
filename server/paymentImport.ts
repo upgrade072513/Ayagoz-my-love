@@ -1,4 +1,4 @@
-import XLSX from "xlsx";
+import { matrixToObjects, readFirstSheetMatrix } from "./security/spreadsheet";
 
 const fieldAliases = {
   invoiceNumber: [
@@ -57,17 +57,8 @@ export type PaymentImportRow = {
 };
 export type PaymentImportError = { row: number; message: string };
 
-export function parsePaymentsExcel(buffer: Buffer) {
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const sheet = workbook.Sheets[workbook.SheetNames[0] ?? ""];
-  if (!sheet)
-    return {
-      rows: [] as PaymentImportRow[],
-      errors: [{ row: 1, message: "В файле нет листов" }],
-    };
-  const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: "",
-  });
+export async function parsePaymentsExcel(buffer: Buffer) {
+  const raw = matrixToObjects(await readFirstSheetMatrix(buffer));
   const rows: PaymentImportRow[] = [];
   const errors: PaymentImportError[] = [];
   raw.forEach((source, index) => {

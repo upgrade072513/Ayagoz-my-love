@@ -1,0 +1,1 @@
+ALTER TABLE `accruals` ADD CONSTRAINT `accruals_contract_period_unique` UNIQUE(`contractId`,`period`);

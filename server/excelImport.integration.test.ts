@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as XLSX from "xlsx";
+import XLSX from "xlsx-js-style"; // tests only: builds fixture workbooks
 
 const mocks = vi.hoisted(() => ({
   createContract: vi.fn(async (input: any) => ({ id: 101, ...input })),

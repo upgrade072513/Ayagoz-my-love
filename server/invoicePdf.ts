@@ -5,7 +5,8 @@ import PDFDocument from "pdfkit";
 import type { Express } from "express";
 import { invoiceDueDateText, PAYMENT_OPTIONS } from "@shared/invoice";
 import { authenticateLocalRequest } from "./localAuth";
-import { getInvoice, getInvoiceItems } from "./db";
+import { requireInvoiceAccess } from "./authz";
+import { consume, rateKey, RULES } from "./security/rateLimit";
 
 const firstExisting = (...candidates: string[]) =>
   candidates.find(candidate => existsSync(candidate));
@@ -226,7 +227,7 @@ export function buildInvoicePdf(
 export const invoicePdfFileName = (invoiceNumber: string) =>
   `Счёт ${invoiceNumber}.pdf`;
 
-/** GET /api/invoices/:id/pdf — for signed-in staff only. */
+/** GET /api/invoices/:id/pdf — signed-in staff with access to the invoice's block only. */
 export function registerInvoicePdfRoute(app: Express) {
   app.get("/api/invoices/:id/pdf", async (req, res) => {
     try {
@@ -234,11 +235,23 @@ export function registerInvoicePdfRoute(app: Express) {
       if (!user) return res.status(401).send("Unauthorized");
       if (user.mustChangePassword)
         return res.status(403).send("Сначала замените временный пароль");
-      const invoice = await getInvoice(Number(req.params.id));
-      if (!invoice) return res.status(404).send("Счёт не найден");
+      if (!/^[1-9]\d{0,9}$/.test(String(req.params.id)))
+        return res.status(400).send("Некорректный номер счёта");
+      const limit = await consume(RULES.pdfRender, rateKey("user", user.id));
+      if (!limit.allowed) return res.status(429).send("Слишком много запросов");
+      let access;
+      try {
+        access = await requireInvoiceAccess(user, Number(req.params.id));
+      } catch (error) {
+        const code = (error as any)?.code;
+        return code === "NOT_FOUND"
+          ? res.status(404).send("Счёт не найден")
+          : res.status(403).send("Нет доступа к счёту");
+      }
+      const { invoice, items } = access;
       const pdf = await buildInvoicePdf(
         invoice as InvoiceForPdf,
-        (await getInvoiceItems(invoice.id)) as InvoiceItemForPdf[]
+        items as InvoiceItemForPdf[]
       );
       const name = invoicePdfFileName(invoice.invoiceNumber);
       res.setHeader("Content-Type", "application/pdf");

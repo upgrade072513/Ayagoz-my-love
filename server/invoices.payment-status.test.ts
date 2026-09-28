@@ -23,6 +23,24 @@ const mocks = vi.hoisted(() => ({
   listPaymentAudit: vi.fn(async (invoiceId: number) => [
     { invoiceId, action: "recorded" },
   ]),
+  // Invoice 42 bills accrual 5 of contract 3 in "Блок А1"; payment 77 belongs to invoice 42.
+  getInvoice: vi.fn(async (id: number) =>
+    id === 42
+      ? { id: 42, invoiceNumber: "INV-42", period: "2026-08" }
+      : undefined
+  ),
+  getInvoiceItems: vi.fn(async (id: number) =>
+    id === 42 ? [{ id: 1, invoiceId: 42, accrualId: 5, amount: "100.00" }] : []
+  ),
+  listAccrualsByIds: vi.fn(async (ids: number[]) =>
+    ids.includes(5) ? [{ id: 5, contractId: 3, status: "invoiced" }] : []
+  ),
+  listContracts: vi.fn(async () => [
+    { id: 3, blockFolder: "Блок А1", propertyName: "Блок 38" },
+  ]),
+  getPayment: vi.fn(async (id: number) =>
+    id === 77 ? { id: 77, invoiceId: 42, status: "posted" } : undefined
+  ),
 }));
 
 vi.mock("./db", () => ({
@@ -35,10 +53,12 @@ vi.mock("./db", () => ({
   createDocument: vi.fn(),
   createInvoice: vi.fn(),
   getContract: vi.fn(),
-  getInvoice: vi.fn(),
-  getInvoiceItems: vi.fn(),
+  getInvoice: mocks.getInvoice,
+  getInvoiceItems: mocks.getInvoiceItems,
+  listAccrualsByIds: mocks.listAccrualsByIds,
+  getPayment: mocks.getPayment,
   listAccruals: vi.fn(async () => []),
-  listContracts: vi.fn(async () => []),
+  listContracts: mocks.listContracts,
   listDocuments: vi.fn(async () => []),
   listInvoices: vi.fn(async () => []),
   markAccrualsInvoiced: vi.fn(),
@@ -59,8 +79,13 @@ vi.mock("./db", () => ({
 
 import { appRouter } from "./routers";
 
+// Managers here are assigned to the invoice's block.
 const caller = (user?: any) =>
-  appRouter.createCaller({ user, req: {}, res: {} } as any);
+  appRouter.createCaller({
+    user: user && { managedBlocks: JSON.stringify(["Блок А1"]), ...user },
+    req: {},
+    res: {},
+  } as any);
 
 describe("invoices.updatePaymentStatus", () => {
   it("persists an allowed status and passes the actor for audit", async () => {

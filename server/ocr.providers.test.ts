@@ -14,7 +14,7 @@ const caller = () =>
     req: {},
     res: {},
   } as any);
-const pdf = `data:application/pdf;base64,${"JVBERi0".repeat(20)}`;
+const pdf = `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n" + "x".repeat(60)).toString("base64")}`;
 const reply = {
   contractNumber: "0294-2026/08-23",
   contractDate: "2026-07-07",
@@ -122,6 +122,8 @@ describe("automatic scan recognition", () => {
       contractDate: "2026-02-01",
       confidence: 0,
     });
-    expect(result.warnings[0]).toContain("API key not valid");
+    // The provider's own error text (may contain keys/URLs) is logged, not shown to the user.
+    expect(result.warnings[0]).toContain("Автораспознавание не сработало");
+    expect(result.warnings.join(" ")).not.toContain("API key");
   });
 });

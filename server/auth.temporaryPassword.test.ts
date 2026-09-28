@@ -145,13 +145,11 @@ describe("one-time password for new employees", () => {
       mustChangePassword: true,
       passwordHash: await hashPassword("Abcd-Efgh-Jkmn"),
     } as any;
-    await appRouter
-      .createCaller(ctxFor(user))
-      .auth.changePassword({
-        currentPassword: "Abcd-Efgh-Jkmn",
-        newPassword: "my own long password",
-        confirmPassword: "my own long password",
-      });
+    await appRouter.createCaller(ctxFor(user)).auth.changePassword({
+      currentPassword: "Abcd-Efgh-Jkmn",
+      newPassword: "my own long password",
+      confirmPassword: "my own long password",
+    });
     expect(db.updateUserLocalAuth.mock.calls[0][1]).toMatchObject({
       mustChangePassword: false,
       temporaryPasswordExpiresAt: null,

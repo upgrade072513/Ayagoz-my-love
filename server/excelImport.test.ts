@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as XLSX from "xlsx";
+import XLSX from "xlsx-js-style"; // tests only: builds fixture workbooks
 import { parseContractsExcel } from "./excelImport";
 
 function workbookBuffer(rows: unknown[][]) {
@@ -10,8 +10,8 @@ function workbookBuffer(rows: unknown[][]) {
 }
 
 describe("parseContractsExcel", () => {
-  it("parses Russian headers and normalizes dates and tariff type", () => {
-    const result = parseContractsExcel(
+  it("parses Russian headers and normalizes dates and tariff type", async () => {
+    const result = await parseContractsExcel(
       workbookBuffer([
         [
           "Номер договора",
@@ -46,8 +46,8 @@ describe("parseContractsExcel", () => {
       tariffAmount: 100000,
     });
   });
-  it("reports invalid tariff rows without dropping valid rows", () => {
-    const result = parseContractsExcel(
+  it("reports invalid tariff rows without dropping valid rows", async () => {
+    const result = await parseContractsExcel(
       workbookBuffer([
         [
           "tenantName",
@@ -64,8 +64,8 @@ describe("parseContractsExcel", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.issues[0]?.row).toBe(3);
   });
-  it("fails when required columns are missing", () => {
-    const result = parseContractsExcel(
+  it("fails when required columns are missing", async () => {
+    const result = await parseContractsExcel(
       workbookBuffer([
         ["Плательщик", "Объект"],
         ["A", "B"],
@@ -78,8 +78,8 @@ describe("parseContractsExcel", () => {
   });
 });
 
-it("rejects malformed and reversed dates", () => {
-  const result = parseContractsExcel(
+it("rejects malformed and reversed dates", async () => {
+  const result = await parseContractsExcel(
     workbookBuffer([
       [
         "tenantName",
@@ -102,8 +102,8 @@ it("rejects malformed and reversed dates", () => {
     "начало позже окончания"
   );
 });
-it("parses a legacy sheet using explicit column mapping", () => {
-  const result = parseContractsExcel(
+it("parses a legacy sheet using explicit column mapping", async () => {
+  const result = await parseContractsExcel(
     workbookBuffer([
       ["Клиент", "Локация", "С", "По", "Начисление", "Цена"],
       ["ТОО Бета", "Корпус 2", "01.08.2026", "31.08.2026", "сутки", "2500"],

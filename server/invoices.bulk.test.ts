@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import XLSX from "xlsx";
+import XLSX from "xlsx-js-style"; // tests only: builds/reads fixture workbooks
 
 const mocks = vi.hoisted(() => ({
   listAccruals: vi.fn(async () => [
@@ -80,10 +80,18 @@ const mocks = vi.hoisted(() => ({
     requested: period ? 3 : 4,
   })),
   updateAccrual: vi.fn(async (id: number, input: any) => ({ id, ...input })),
+  updateDraftAccrual: vi.fn(async (id: number, input: any) => ({
+    id,
+    ...input,
+  })),
   deleteAccrual: vi.fn(async (id: number) => ({ id })),
+  getAccrual: vi.fn(async (id: number) =>
+    (await mocks.listAccruals()).find((row: any) => row.id === id)
+  ),
 }));
 vi.mock("./db", () => ({
   ...mocks,
+  AccrualsAlreadyInvoicedError: class extends Error {},
   createAccrual: vi.fn(),
   createContract: vi.fn(),
   createDocument: vi.fn(),
@@ -121,8 +129,15 @@ describe("invoices.bulkCreate", () => {
       "Плательщик 1",
       "Плательщик 2",
     ]);
-    expect(mocks.markAccrualsInvoiced).toHaveBeenCalledWith([1]);
-    expect(mocks.markAccrualsInvoiced).toHaveBeenCalledWith([2]);
+    // Accruals are switched to "invoiced" inside createInvoice's transaction (atomic).
+    expect(mocks.createInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantName: "Плательщик 1" }),
+      [expect.objectContaining({ accrualId: 1 })]
+    );
+    expect(mocks.createInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantName: "Плательщик 2" }),
+      [expect.objectContaining({ accrualId: 2 })]
+    );
   });
 });
 
@@ -141,7 +156,7 @@ describe("accruals.updateFromPreview", () => {
       serviceFrom: "2026-07-01",
       serviceTo: "2026-07-31",
     });
-    expect(mocks.updateAccrual).toHaveBeenCalledWith(
+    expect(mocks.updateDraftAccrual).toHaveBeenCalledWith(
       1,
       expect.objectContaining({
         contractId: 11,

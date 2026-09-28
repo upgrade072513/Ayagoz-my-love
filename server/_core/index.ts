@@ -2,13 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
-import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerStorageProxy } from "./storageProxy";
-import { appRouter } from "../routers";
-import { createContext } from "./context";
+import { registerApi, safeErrorHandler } from "./app";
 import { serveStatic, setupVite } from "./vite";
-import { archiveExpiredContractsHandler } from "../scheduled";
-import { registerInvoicePdfRoute } from "../invoicePdf";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -32,43 +27,15 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  app.disable("x-powered-by");
-  // Railway (and most PaaS) terminate TLS at a proxy: trust it so req.ip / req.protocol are real.
-  app.set("trust proxy", 1);
-  app.use((_req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader(
-      "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=()"
-    );
-    next();
-  });
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  app.get("/healthz", (_req, res) => res.json({ ok: true }));
-  registerStorageProxy(app);
-  registerInvoicePdfRoute(app);
-  app.post(
-    "/api/scheduled/archive-expired-contracts",
-    archiveExpiredContractsHandler
-  );
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
+  registerApi(app);
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
+
+  app.use(safeErrorHandler);
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);

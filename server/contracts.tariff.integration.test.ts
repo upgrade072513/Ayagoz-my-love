@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => ({
   getContract: vi.fn(async (id: number) =>
     state.contracts.find(row => row.id === id)
   ),
-  updateAccrual: vi.fn(async (id: number, input: any) => {
+  // Draft-only update (the router never rewrites invoiced accruals).
+  updateDraftAccrual: vi.fn(async (id: number, input: any) => {
     const index = state.accruals.findIndex(row => row.id === id);
     if (index < 0) return undefined;
     state.accruals[index] = { ...state.accruals[index], ...input };
@@ -141,7 +142,7 @@ describe("persisted tariff types and accrual generation", () => {
       amount: "155000.00",
       quantity: "31.00",
     });
-    expect(mocks.updateAccrual).toHaveBeenCalledWith(
+    expect(mocks.updateDraftAccrual).toHaveBeenCalledWith(
       monthlyRows[0].id,
       expect.objectContaining({ amount: "155000.00", quantity: "31.00" })
     );

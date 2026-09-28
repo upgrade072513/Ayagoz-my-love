@@ -6,6 +6,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ENV } from "./_core/env";
+import { safeRequest } from "./security/ssrf";
 
 export const DISK_URL_PREFIX = "/files/";
 const LEGACY_URL_PREFIX = "/manus-storage/";
@@ -82,12 +83,16 @@ export async function storagePut(
     return { key, url: `${DISK_URL_PREFIX}${key}` };
   }
 
-  const uploadResp = await fetch(await forgePresign("put", key), {
+  // The signed URL comes from a remote service: it is fetched through the SSRF guard.
+  const uploadResp = await safeRequest(await forgePresign("put", key), {
     method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: new Blob([bytes], { type: contentType }),
+    headers: {
+      "Content-Type": contentType,
+      "Content-Length": String(bytes.length),
+    },
+    body: bytes,
   });
-  if (!uploadResp.ok)
+  if (uploadResp.status < 200 || uploadResp.status >= 300)
     throw new Error(`Storage upload failed (${uploadResp.status})`);
   return { key, url: `${LEGACY_URL_PREFIX}${key}` };
 }
@@ -112,9 +117,12 @@ export async function storageRead(relKey: string): Promise<Buffer> {
       throw new Error("Файл не найден в хранилище. Загрузите скан заново.");
     }
   }
-  const response = await fetch(await forgePresign("get", key));
-  if (!response.ok) throw new Error("Не удалось получить файл документа");
-  return Buffer.from(await response.arrayBuffer());
+  const response = await safeRequest(await forgePresign("get", key), {
+    maxBytes: 50 * 1024 * 1024,
+  });
+  if (response.status < 200 || response.status >= 300)
+    throw new Error("Не удалось получить файл документа");
+  return response.body;
 }
 
 /** Legacy helper (forge only): a short-lived download URL. */

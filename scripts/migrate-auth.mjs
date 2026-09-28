@@ -50,6 +50,57 @@ try {
     console.log("[migrate-auth] dropped legacy users.openId (Manus OAuth)");
   }
 
+  // --- Security hardening (0023) --------------------------------------------------------
+  // Shared rate-limit counters (login throttling works across several app instances).
+  await connection.query(
+    "CREATE TABLE IF NOT EXISTS `rateLimits` (`key` varchar(128) NOT NULL, `count` int NOT NULL DEFAULT 0, `resetAtMs` bigint NOT NULL, CONSTRAINT `rateLimits_key` PRIMARY KEY(`key`))"
+  );
+  // One accrual may be billed only once. Added only when existing data allows it.
+  const [itemIndexes] = await connection.query(
+    "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'invoiceItems'",
+    [db]
+  );
+  if (!itemIndexes.some(row => row.name === "invoiceItems_accrualId_unique")) {
+    const [duplicates] = await connection.query(
+      "SELECT accrualId, COUNT(*) AS n FROM `invoiceItems` GROUP BY accrualId HAVING n > 1 LIMIT 20"
+    );
+    if (duplicates.length) {
+      console.warn(
+        "[migrate-auth] WARNING: some accruals are billed in more than one invoice; unique index not added. Accrual ids:",
+        duplicates.map(row => row.accrualId).join(", ")
+      );
+    } else {
+      await connection.query(
+        "ALTER TABLE `invoiceItems` ADD CONSTRAINT `invoiceItems_accrualId_unique` UNIQUE(`accrualId`)"
+      );
+      console.log("[migrate-auth] added unique index invoiceItems.accrualId");
+    }
+  }
+  // One accrual per contract and month (prevents double billing through duplicates).
+  const [accrualIndexes] = await connection.query(
+    "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'accruals'",
+    [db]
+  );
+  if (!accrualIndexes.some(row => row.name === "accruals_contract_period_unique")) {
+    const [duplicates] = await connection.query(
+      "SELECT contractId, period, COUNT(*) AS n FROM `accruals` WHERE contractId IS NOT NULL GROUP BY contractId, period HAVING n > 1 LIMIT 20"
+    );
+    if (duplicates.length) {
+      console.warn(
+        "[migrate-auth] WARNING: duplicate accruals for the same contract and month; unique index not added:",
+        duplicates.map(row => `${row.contractId}/${row.period}`).join(", ")
+      );
+    } else {
+      await connection.query(
+        "ALTER TABLE `accruals` ADD CONSTRAINT `accruals_contract_period_unique` UNIQUE(`contractId`,`period`)"
+      );
+      console.log("[migrate-auth] added unique index accruals(contractId, period)");
+    }
+  }
+  // Expired sessions are useless; keep the table small.
+  await connection.query("DELETE FROM `authSessions` WHERE `expiresAt` < NOW() - INTERVAL 30 DAY");
+  await connection.query("DELETE FROM `rateLimits` WHERE `resetAtMs` < ?", [Date.now() - 24 * 3600 * 1000]);
+
   console.log("[migrate-auth] schema is up to date");
 } finally {
   await connection.end();

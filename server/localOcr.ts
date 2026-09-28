@@ -68,11 +68,76 @@ async function getWorker() {
   return workerPromise;
 }
 
-/** One recognition at a time: Tesseract is CPU-heavy, parallel jobs would only slow each other down. */
+const MAX_QUEUED_JOBS = 4;
+let queuedJobs = 0;
+
+export class OcrBusyError extends Error {
+  constructor() {
+    super(
+      "Распознавание сейчас занято другими сканами. Попробуйте через минуту."
+    );
+    this.name = "OcrBusyError";
+  }
+}
+
+/** One recognition at a time: Tesseract is CPU-heavy. The queue is bounded, so it cannot be flooded. */
 function serial<T>(job: () => Promise<T>): Promise<T> {
-  const run = queue.then(job, job);
+  if (queuedJobs >= MAX_QUEUED_JOBS) return Promise.reject(new OcrBusyError());
+  queuedJobs++;
+  const run = queue.then(job, job).finally(() => {
+    queuedJobs--;
+  });
   queue = run.catch(() => undefined);
   return run;
+}
+
+// Pixel limits: a small compressed file must not expand into gigabytes of bitmap (image bomb).
+const MAX_SIDE_PX = 10_000;
+const MAX_PIXELS = 40_000_000;
+const RENDER_MAX_SIDE_PX = 4_000;
+
+/** Reads width/height from PNG or JPEG headers without decoding the image. */
+export function imageDimensions(
+  bytes: Buffer
+): { width: number; height: number } | null {
+  if (bytes.length > 24 && bytes.readUInt32BE(12) === 0x49484452)
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) {
+        offset++;
+        continue;
+      }
+      const marker = bytes[offset + 1];
+      const length = bytes.readUInt16BE(offset + 2);
+      if (
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        ![0xc4, 0xc8, 0xcc].includes(marker)
+      )
+        return {
+          height: bytes.readUInt16BE(offset + 5),
+          width: bytes.readUInt16BE(offset + 7),
+        };
+      if (length < 2) return null;
+      offset += 2 + length;
+    }
+  }
+  return null;
+}
+
+function assertImageSize(bytes: Buffer) {
+  const size = imageDimensions(bytes);
+  if (!size) throw new Error("Не удалось прочитать изображение");
+  if (
+    size.width < 1 ||
+    size.height < 1 ||
+    size.width > MAX_SIDE_PX ||
+    size.height > MAX_SIDE_PX ||
+    size.width * size.height > MAX_PIXELS
+  )
+    throw new Error("Изображение слишком большое для распознавания");
 }
 
 async function ocrImage(image: Buffer) {
@@ -104,8 +169,12 @@ async function readPdf(bytes: Uint8Array) {
           confidences.push(0.98);
           continue;
         }
+        // Scale is capped so that even a huge page size cannot produce a giant bitmap.
+        const [x0, y0, x1, y1] = page.getBounds();
+        const longest = Math.max(1, Math.abs(x1 - x0), Math.abs(y1 - y0));
+        const scale = Math.min(RENDER_SCALE, RENDER_MAX_SIDE_PX / longest);
         const pixmap = page.toPixmap(
-          mupdf.Matrix.scale(RENDER_SCALE, RENDER_SCALE),
+          mupdf.Matrix.scale(scale, scale),
           mupdf.ColorSpace.DeviceGray,
           false,
           true
@@ -149,6 +218,7 @@ export async function recognizeLocally(input: {
 }) {
   return serial(async () => {
     const bytes = Buffer.from(input.base64, "base64");
+    if (input.mimeType !== "application/pdf") assertImageSize(bytes);
     const read =
       input.mimeType === "application/pdf"
         ? await readPdf(new Uint8Array(bytes))
@@ -413,6 +483,8 @@ const beforePeriod = (zone: string) => {
 };
 
 export function parseContractText(rawText: string, ocrConfidence = 0.9) {
+  // Bounded input keeps every regex below linear-time in practice (a crafted PDF text layer can be huge).
+  rawText = String(rawText ?? "").slice(0, 200_000);
   const text = rawText
     .replace(/\r/g, "")
     .replace(/(^|[\s,(«])т\.\s*(?=[А-ЯЁ])/gu, "$1г. ")

@@ -18,9 +18,6 @@ import {
 } from "./db";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-const RATE_LIMIT_WINDOW_MS = 1000 * 60 * 15;
-const RATE_LIMIT_MAX_ATTEMPTS = 8;
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 const scrypt = (password: string, salt: Buffer) =>
   new Promise<Buffer>((resolve, reject) => {
@@ -38,6 +35,7 @@ export const normalizeEmail = (email: string) => email.trim().toLowerCase();
 export async function hashPassword(password: string) {
   if (password.length < 10)
     throw new Error("Пароль должен содержать минимум 10 символов");
+  if (password.length > 256) throw new Error("Пароль слишком длинный");
   const salt = randomBytes(16);
   const derivedKey = await scrypt(password, salt);
   return `scrypt$${salt.toString("hex")}$${derivedKey.toString("hex")}`;
@@ -47,7 +45,7 @@ export async function verifyPassword(
   password: string,
   encodedHash: string | null | undefined
 ) {
-  if (!encodedHash) return false;
+  if (!encodedHash || password.length > 256) return false;
   const [algorithm, saltHex, hashHex] = encodedHash.split("$");
   if (algorithm !== "scrypt" || !saltHex || !hashHex) return false;
   try {
@@ -83,37 +81,17 @@ export const hashToken = (token: string) =>
 
 const hashIp = (ip: string) =>
   createHash("sha256").update(`${ENV.sessionSecret}:${ip}`).digest("hex");
-const requestIp = (req: Request) =>
-  String(req.ip || req.headers["x-forwarded-for"] || "unknown")
-    .split(",")[0]
-    .trim();
-const rateKey = (req: Request, email: string) =>
-  `${requestIp(req)}:${normalizeEmail(email)}`;
+/** Client IP as resolved by Express ("trust proxy" is set to the single Railway proxy hop). */
+export const requestIp = (req: Request) =>
+  String(req.ip || req.socket?.remoteAddress || "unknown").slice(0, 64);
 
-export function assertLoginRateLimit(req: Request, email: string) {
-  const now = Date.now();
-  const key = rateKey(req, email);
-  const current = loginAttempts.get(key);
-  if (!current || current.resetAt <= now) {
-    loginAttempts.set(key, { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return;
-  }
-  if (current.count >= RATE_LIMIT_MAX_ATTEMPTS)
-    throw new Error("Неверный Email или пароль");
-}
+/**
+ * A syntactically valid scrypt hash that matches no password. Login verifies against it when the
+ * account does not exist, so response time does not reveal which e-mails are registered.
+ */
+export const DUMMY_PASSWORD_HASH = `scrypt$${randomBytes(16).toString("hex")}$${randomBytes(64).toString("hex")}`;
 
-export function recordFailedLogin(req: Request, email: string) {
-  const now = Date.now();
-  const key = rateKey(req, email);
-  const current = loginAttempts.get(key);
-  if (!current || current.resetAt <= now)
-    loginAttempts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-  else current.count += 1;
-}
-
-export function clearFailedLogins(req: Request, email: string) {
-  loginAttempts.delete(rateKey(req, email));
-}
+// Brute-force protection lives in ./security/rateLimit (database-backed, multi-instance safe).
 
 export function getSessionToken(req: Request) {
   return parseCookie(req.headers.cookie ?? "")[COOKIE_NAME] || null;
@@ -130,7 +108,16 @@ export async function authenticateLocalRequest(req: Request) {
   )
     return null;
   if (result.user.accountStatus !== "active") return null;
-  await updateAuthSessionSeen(result.session.id);
+  // A session opened with a one-time password dies when that password expires unchanged.
+  if (
+    result.user.mustChangePassword &&
+    result.user.temporaryPasswordExpiresAt &&
+    new Date(result.user.temporaryPasswordExpiresAt).getTime() <= Date.now()
+  )
+    return null;
+  // "Last seen" is refreshed at most every 5 minutes (not a write per request).
+  if (Date.now() - new Date(result.session.lastSeenAt).getTime() > 5 * 60_000)
+    await updateAuthSessionSeen(result.session.id);
   return result.user;
 }
 

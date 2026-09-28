@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import XLSX from "xlsx";
+import XLSX from "xlsx-js-style"; // tests only: builds/reads fixture workbooks
 import { parsePaymentsExcel } from "./paymentImport";
 
 const workbookBuffer = (rows: unknown[][]) => {
@@ -15,8 +15,8 @@ const workbookBuffer = (rows: unknown[][]) => {
 };
 
 describe("payment Excel import", () => {
-  it("parses Russian payment headers and localized methods", () => {
-    const result = parsePaymentsExcel(
+  it("parses Russian payment headers and localized methods", async () => {
+    const result = await parsePaymentsExcel(
       workbookBuffer([
         [
           "№ счёта",
@@ -41,8 +41,8 @@ describe("payment Excel import", () => {
     ]);
   });
 
-  it("parses English headers and reports row-level validation errors", () => {
-    const result = parsePaymentsExcel(
+  it("parses English headers and reports row-level validation errors", async () => {
+    const result = await parsePaymentsExcel(
       workbookBuffer([
         ["Invoice Number", "Amount", "Payment Date", "Method"],
         ["INV-1", 100, "2026-08-21", "bank"],
