@@ -176,64 +176,191 @@ export async function permanentlyDeleteContract(id: number) {
   const contract = contractsFound[0];
   if (!contract) throw new Error("Договор не найден");
 
-  // Permanent contract deletion is allowed even when accruals were already billed.
-  // We preserve financial history by detaching the accruals from the deleted contract
-  // instead of deleting invoiceItems/accruals. This keeps invoices and payment history intact.
-  const linkedAccruals = await db
-    .select({ id: accruals.id })
-    .from(accruals)
-    .where(eq(accruals.contractId, id));
-  const linkedDocuments = await db
-    .select({ id: documents.id })
-    .from(documents)
-    .where(eq(documents.contractId, id));
+  const result = await db.transaction(async tx => {
+    const linkedAccruals = await tx
+      .select({ id: accruals.id })
+      .from(accruals)
+      .where(eq(accruals.contractId, id));
+    const accrualIds = linkedAccruals.map(row => row.id);
 
-  await db.transaction(async tx => {
-    if (linkedAccruals.length) {
-      await tx
-        .update(accruals)
-        .set({ contractId: null })
-        .where(
-          inArray(
-            accruals.id,
-            linkedAccruals.map(row => row.id)
-          )
-        );
+    const linkedDocuments = await tx
+      .select({ id: documents.id })
+      .from(documents)
+      .where(eq(documents.contractId, id));
+
+    let invoiceIds: number[] = [];
+    let invoiceItemRows: Array<{
+      invoiceId: number;
+      accrualId: number;
+      contractId: number | null;
+    }> = [];
+
+    if (accrualIds.length) {
+      invoiceItemRows = await tx
+        .select({
+          invoiceId: invoiceItems.invoiceId,
+          accrualId: invoiceItems.accrualId,
+          contractId: accruals.contractId,
+        })
+        .from(invoiceItems)
+        .innerJoin(accruals, eq(invoiceItems.accrualId, accruals.id))
+        .where(inArray(invoiceItems.accrualId, accrualIds));
+      invoiceIds = Array.from(
+        new Set(invoiceItemRows.map(row => row.invoiceId))
+      );
     }
+
+    const deletedInvoiceIds: number[] = [];
+    const retainedMixedInvoiceIds: number[] = [];
+    let deletedInvoiceItems = 0;
+    let deletedPayments = 0;
+    let deletedPaymentAudit = 0;
+
+    for (const invoiceId of invoiceIds) {
+      const allItems = await tx
+        .select({
+          accrualId: invoiceItems.accrualId,
+          contractId: accruals.contractId,
+        })
+        .from(invoiceItems)
+        .innerJoin(accruals, eq(invoiceItems.accrualId, accruals.id))
+        .where(eq(invoiceItems.invoiceId, invoiceId));
+
+      const belongsOnlyToContract =
+        allItems.length > 0 &&
+        allItems.every(item => item.contractId === id);
+
+      if (belongsOnlyToContract) {
+        const paymentRows = await tx
+          .select({ id: payments.id })
+          .from(payments)
+          .where(eq(payments.invoiceId, invoiceId));
+        deletedPayments += paymentRows.length;
+
+        const auditRows = await tx
+          .select({ id: paymentAudit.id })
+          .from(paymentAudit)
+          .where(eq(paymentAudit.invoiceId, invoiceId));
+        deletedPaymentAudit += auditRows.length;
+
+        await tx
+          .delete(paymentAudit)
+          .where(eq(paymentAudit.invoiceId, invoiceId));
+        await tx.delete(payments).where(eq(payments.invoiceId, invoiceId));
+        await tx
+          .delete(invoiceItems)
+          .where(eq(invoiceItems.invoiceId, invoiceId));
+        deletedInvoiceItems += allItems.length;
+        await tx.delete(invoices).where(eq(invoices.id, invoiceId));
+        deletedInvoiceIds.push(invoiceId);
+      } else {
+        // A single invoice can contain items from multiple contracts (the current
+        // bulk billing groups by tenant). Remove only this contract's lines and
+        // keep the shared invoice with the remaining contracts' items.
+        const contractItems = allItems.filter(item => item.contractId === id);
+        await tx
+          .delete(invoiceItems)
+          .where(
+            and(
+              eq(invoiceItems.invoiceId, invoiceId),
+              inArray(invoiceItems.accrualId, accrualIds)
+            )
+          );
+        deletedInvoiceItems += contractItems.length;
+        retainedMixedInvoiceIds.push(invoiceId);
+      }
+    }
+
+    if (retainedMixedInvoiceIds.length) {
+      for (const invoiceId of retainedMixedInvoiceIds) {
+        const remaining = await tx
+          .select({ amount: invoiceItems.amount })
+          .from(invoiceItems)
+          .where(eq(invoiceItems.invoiceId, invoiceId));
+        const total = remaining.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        if (remaining.length === 0) {
+          await tx.delete(paymentAudit).where(eq(paymentAudit.invoiceId, invoiceId));
+          const paymentsResult = await tx
+            .delete(payments)
+            .where(eq(payments.invoiceId, invoiceId));
+          deletedPayments += Number((paymentsResult as any)[0]?.affectedRows ?? 0);
+          await tx.delete(invoices).where(eq(invoices.id, invoiceId));
+          deletedInvoiceIds.push(invoiceId);
+        } else {
+          await tx
+            .update(invoices)
+            .set({ totalAmount: total.toFixed(2) })
+            .where(eq(invoices.id, invoiceId));
+          await recalculateStatusWith(tx, invoiceId);
+        }
+      }
+    }
+
+    if (accrualIds.length) {
+      await tx.delete(accruals).where(inArray(accruals.id, accrualIds));
+    }
+
     for (const document of linkedDocuments) {
       await tx
         .delete(documentPermissions)
         .where(eq(documentPermissions.documentId, document.id));
       await tx.delete(documents).where(eq(documents.id, document.id));
     }
+
     await tx
       .delete(contractAuditLog)
       .where(eq(contractAuditLog.contractId, id));
     await tx.delete(contracts).where(eq(contracts.id, id));
+
+    return {
+      deletedInvoices: deletedInvoiceIds.length,
+      deletedInvoiceItems,
+      deletedPayments,
+      deletedPaymentAudit,
+      retainedMixedInvoices: retainedMixedInvoiceIds.length,
+      deletedAccruals: accrualIds.length,
+      deletedDocuments: linkedDocuments.length,
+    };
   });
 
   return {
     success: true,
     id,
-    detachedAccruals: linkedAccruals.length,
-    deletedDocuments: linkedDocuments.length,
+    ...result,
   };
 }
 
 export async function permanentlyDeleteContracts(ids: number[]) {
   if (!ids.length) throw new Error("Выберите хотя бы один договор");
-  let detachedAccruals = 0;
+  let deletedInvoices = 0;
+  let deletedInvoiceItems = 0;
+  let deletedPayments = 0;
+  let deletedPaymentAudit = 0;
+  let retainedMixedInvoices = 0;
+  let deletedAccruals = 0;
   let deletedDocuments = 0;
+
   for (const id of ids) {
     const result = await permanentlyDeleteContract(id);
-    detachedAccruals += result.detachedAccruals;
+    deletedInvoices += result.deletedInvoices;
+    deletedInvoiceItems += result.deletedInvoiceItems;
+    deletedPayments += result.deletedPayments;
+    deletedPaymentAudit += result.deletedPaymentAudit;
+    retainedMixedInvoices += result.retainedMixedInvoices;
+    deletedAccruals += result.deletedAccruals;
     deletedDocuments += result.deletedDocuments;
   }
+
   return {
     success: true,
     ids,
     deletedContracts: ids.length,
-    detachedAccruals,
+    deletedInvoices,
+    deletedInvoiceItems,
+    deletedPayments,
+    deletedPaymentAudit,
+    retainedMixedInvoices,
+    deletedAccruals,
     deletedDocuments,
   };
 }
@@ -1047,8 +1174,8 @@ export async function listPermanentlyDeletableContractIds() {
   if (!db) return [];
 
   // Permanent deletion is an Administrator-only operation and is allowed even when
-  // the contract has accruals or invoice items. The delete operation detaches the
-  // accruals so invoice and payment history remains intact.
+  // the contract has accruals or invoice items. Linked financial records are removed
+  // with the contract; shared invoices are kept with their remaining items.
   const rows = await db
     .select({ id: contracts.id })
     .from(contracts);
