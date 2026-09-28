@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { areSimilarTenantNames, findContractDuplicates, formatUploadFileSize, isSupportedScanFile, parseContractIdentityFromFileName, uploadProgressPercent } from "./Home";
+import { areSimilarTenantNames, findContractDuplicates, formatUploadFileSize, isSupportedScanFile, parseContractIdentityFromFileName, shouldOpenNavigationContract, uploadProgressPercent } from "./Home";
 
 describe("contract scan upload formats", () => {
   it("accepts PDF, JPG, and PNG files", () => {
@@ -43,5 +43,15 @@ describe("smart upload queue", () => {
     expect(areSimilarTenantNames("анна петрова", "анна петрва")).toBe(true);
     expect(areSimilarTenantNames("анна петрова", "борис")).toBe(false);
     expect(findContractDuplicates({ contractNumber: "Д-999", tenantName: "Анна Петрва" }, [{ id: 4, contractNumber: "Д-004", tenantName: "Анна Петрова" }])[0]?.matchedBy).toEqual(["tenantName"]);
+  });
+});
+
+
+describe("contract navigation", () => {
+  it("opens a navigation target once and does not reopen it after list invalidation", () => {
+    expect(shouldOpenNavigationContract(42, null)).toBe(true);
+    expect(shouldOpenNavigationContract(42, 42)).toBe(false);
+    expect(shouldOpenNavigationContract(43, 42)).toBe(true);
+    expect(shouldOpenNavigationContract(null, 42)).toBe(false);
   });
 });

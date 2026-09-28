@@ -1674,15 +1674,32 @@ export const appRouter = router({
           "manageContracts",
           "Недостаточно прав для импорта договоров"
         );
-        const imported = [];
-        for (const row of input.rows) {
-          await ensureUniqueContractNumber(row.contractNumber);
-          const blockFolder = deriveBlockFolder(
+        // Validate the entire chunk before the first INSERT. Otherwise one bad row
+        // near the end of a 100-row batch leaves earlier rows saved while the UI
+        // reports the whole chunk as failed.
+        const prepared = input.rows.map(row => ({
+          row,
+          blockFolder: deriveBlockFolder(
             row.propertyName,
             row.unitName,
             row.blockFolder
-          );
+          ),
+        }));
+        const seenNumbers = new Set<string>();
+        for (const { row, blockFolder } of prepared) {
           requireBlockAccess(ctx.user, blockFolder);
+          const normalizedNumber = row.contractNumber?.trim().toLocaleLowerCase();
+          if (normalizedNumber) {
+            if (seenNumbers.has(normalizedNumber))
+              throw new Error(
+                `В импортируемом файле повторяется номер договора «${row.contractNumber!.trim()}»`
+              );
+            seenNumbers.add(normalizedNumber);
+            await ensureUniqueContractNumber(row.contractNumber);
+          }
+        }
+        const imported = [];
+        for (const { row, blockFolder } of prepared) {
           imported.push(
             await createContract({
               ...row,

@@ -1051,28 +1051,21 @@ export async function listAllInvoiceItems() {
 export async function listPermanentlyDeletableContractIds() {
   const db = await getDb();
   if (!db) return [];
-  const allContracts = await db.select({ id: contracts.id }).from(contracts);
-  const eligible: number[] = [];
-  for (const row of allContracts) {
-    const linkedAccruals = await db
-      .select({ id: accruals.id })
-      .from(accruals)
-      .where(eq(accruals.contractId, row.id));
-    let blocked = false;
-    for (const accrual of linkedAccruals) {
-      const linked = await db
-        .select({ id: invoiceItems.id })
-        .from(invoiceItems)
-        .where(eq(invoiceItems.accrualId, accrual.id))
-        .limit(1);
-      if (linked.length) {
-        blocked = true;
-        break;
-      }
-    }
-    if (!blocked) eligible.push(row.id);
-  }
-  return eligible;
+
+  // One grouped query instead of N+1 queries. A contract is eligible when none of
+  // its accruals has ever been attached to an invoice item. This endpoint is called
+  // on the contracts screen for administrators, so the old per-contract/per-accrual
+  // loop could turn into hundreds or thousands of DB round-trips and surface as a
+  // generic "Внутренняя ошибка сервера" under real production data.
+  const rows = await db
+    .select({ id: contracts.id })
+    .from(contracts)
+    .leftJoin(accruals, eq(accruals.contractId, contracts.id))
+    .leftJoin(invoiceItems, eq(invoiceItems.accrualId, accruals.id))
+    .groupBy(contracts.id)
+    .having(sql`COUNT(${invoiceItems.id}) = 0`);
+
+  return rows.map(row => row.id);
 }
 
 export async function getUserByEmailNormalized(emailNormalized: string) {
