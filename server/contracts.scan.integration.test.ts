@@ -69,6 +69,7 @@ describe("contracts scan OCR", () => {
       "FILE_ENCRYPTION_KEY",
       "test-contract-file-key-with-at-least-32-bytes"
     );
+    vi.stubEnv("OCR_ENGINE", "forge"); // legacy Forge model only when explicitly enabled
     vi.stubEnv("BUILT_IN_FORGE_API_URL", "https://forge.test");
     vi.stubEnv("BUILT_IN_FORGE_API_KEY", "test-key");
   });
@@ -148,6 +149,22 @@ describe("contracts scan OCR", () => {
     expect(result.warnings).toContain(
       "Не удалось уверенно прочитать даты и ставку"
     );
+  });
+
+  it("uses the built-in recognition when old Forge variables are still set but not enabled", async () => {
+    vi.stubEnv("OCR_ENGINE", "");
+    mocks.invokeLLM.mockClear();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.contracts.previewScan({
+      dataUrl: pdfDataUrl,
+      fileName: "0455-2026-08-23 от 24.08.2026г. Маликов Айдар.pdf",
+      mimeType: "application/pdf",
+    });
+    expect(mocks.invokeLLM).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      contractNumber: "0455-2026/08-23",
+      contractDate: "2026-08-24",
+    });
   });
 
   it("rejects a file whose content does not match the declared type", async () => {

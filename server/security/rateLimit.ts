@@ -23,10 +23,37 @@ async function database() {
   }
 }
 
+function incrementInMemory(key: string, windowMs: number, now: number): Bucket {
+  const current = memory.get(key);
+  const next =
+    !current || current.resetAtMs <= now
+      ? { count: 1, resetAtMs: now + windowMs }
+      : { count: current.count + 1, resetAtMs: current.resetAtMs };
+  memory.set(key, next);
+  return next;
+}
+
 async function increment(
   key: string,
   windowMs: number,
   now = Date.now()
+): Promise<Bucket> {
+  try {
+    return await incrementInDb(key, windowMs, now);
+  } catch (error) {
+    // A broken counter table must not take the feature down: fall back to this instance's memory.
+    console.error(
+      "[rate-limit] database counter unavailable, using memory:",
+      error
+    );
+    return incrementInMemory(key, windowMs, now);
+  }
+}
+
+async function incrementInDb(
+  key: string,
+  windowMs: number,
+  now: number
 ): Promise<Bucket> {
   const db = await database();
   const resetAtMs = now + windowMs;
@@ -72,16 +99,21 @@ export async function peek(rule: RateRule, key: string) {
   const full = `${rule.name}|${key}`;
   const now = Date.now();
   const db = await database();
-  let bucket: Bucket | undefined;
-  if (!db) bucket = memory.get(full);
-  else {
-    const rows: any = await db.execute(
-      sql`SELECT \`count\`, resetAtMs FROM rateLimits WHERE \`key\` = ${full}`
-    );
-    const row = Array.isArray(rows?.[0]) ? rows[0][0] : rows?.[0];
-    if (row)
-      bucket = { count: Number(row.count), resetAtMs: Number(row.resetAtMs) };
-  }
+  let bucket: Bucket | undefined = memory.get(full);
+  if (db)
+    try {
+      const rows: any = await db.execute(
+        sql`SELECT \`count\`, resetAtMs FROM rateLimits WHERE \`key\` = ${full}`
+      );
+      const row = Array.isArray(rows?.[0]) ? rows[0][0] : rows?.[0];
+      if (row)
+        bucket = { count: Number(row.count), resetAtMs: Number(row.resetAtMs) };
+    } catch (error) {
+      console.error(
+        "[rate-limit] database counter unavailable, using memory:",
+        error
+      );
+    }
   const active = bucket && bucket.resetAtMs > now ? bucket : undefined;
   return {
     allowed: !active || active.count < rule.limit,
@@ -93,7 +125,10 @@ export async function reset(rule: RateRule, key: string) {
   const full = `${rule.name}|${key}`;
   memory.delete(full);
   const db = await database();
-  if (db) await db.execute(sql`DELETE FROM rateLimits WHERE \`key\` = ${full}`);
+  if (db)
+    await db
+      .execute(sql`DELETE FROM rateLimits WHERE \`key\` = ${full}`)
+      .catch(error => console.error("[rate-limit] reset failed:", error));
 }
 
 /** tRPC helper: throws TOO_MANY_REQUESTS with a human message. */

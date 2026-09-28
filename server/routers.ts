@@ -748,9 +748,11 @@ async function extractContractFromScan(input: {
     }
   }
   if (
+    // The legacy Manus Forge model is used only when explicitly requested (OCR_ENGINE=forge):
+    // its variables may still be present after the move to Railway while the service no longer works.
+    process.env.OCR_ENGINE !== "forge" ||
     !process.env.BUILT_IN_FORGE_API_URL ||
-    !process.env.BUILT_IN_FORGE_API_KEY ||
-    process.env.OCR_ENGINE === "local"
+    !process.env.BUILT_IN_FORGE_API_KEY
   ) {
     // Default: our own recognition (MuPDF + Tesseract + contract rules), no external service involved.
     try {
@@ -846,8 +848,13 @@ async function extractContractFromScan(input: {
       throw error;
     }
   } catch (error) {
-    if (isOcrCapacityError(error)) return buildOcrFallback(input.fileName);
-    throw error;
+    console.warn("[OCR:forge]", error);
+    return buildOcrFallback(
+      input.fileName,
+      isOcrCapacityError(error)
+        ? undefined
+        : "Автораспознавание не сработало. Номер и дата взяты из имени файла."
+    );
   }
 }
 
