@@ -175,37 +175,30 @@ export async function permanentlyDeleteContract(id: number) {
     .limit(1);
   const contract = contractsFound[0];
   if (!contract) throw new Error("Договор не найден");
+
+  // Permanent contract deletion is allowed even when accruals were already billed.
+  // We preserve financial history by detaching the accruals from the deleted contract
+  // instead of deleting invoiceItems/accruals. This keeps invoices and payment history intact.
   const linkedAccruals = await db
     .select({ id: accruals.id })
     .from(accruals)
     .where(eq(accruals.contractId, id));
-  // Financial history is never destroyed: a contract whose accruals are billed cannot be deleted.
-  if (linkedAccruals.length) {
-    const billed = await db
-      .select({ id: invoiceItems.id })
-      .from(invoiceItems)
-      .where(
-        inArray(
-          invoiceItems.accrualId,
-          linkedAccruals.map(row => row.id)
-        )
-      )
-      .limit(1);
-    if (billed.length)
-      throw new Error(
-        "Договор нельзя удалить окончательно: по нему выставлены счета"
-      );
-  }
   const linkedDocuments = await db
     .select({ id: documents.id })
     .from(documents)
     .where(eq(documents.contractId, id));
+
   await db.transaction(async tx => {
-    for (const accrual of linkedAccruals) {
+    if (linkedAccruals.length) {
       await tx
-        .delete(invoiceItems)
-        .where(eq(invoiceItems.accrualId, accrual.id));
-      await tx.delete(accruals).where(eq(accruals.id, accrual.id));
+        .update(accruals)
+        .set({ contractId: null })
+        .where(
+          inArray(
+            accruals.id,
+            linkedAccruals.map(row => row.id)
+          )
+        );
     }
     for (const document of linkedDocuments) {
       await tx
@@ -218,28 +211,29 @@ export async function permanentlyDeleteContract(id: number) {
       .where(eq(contractAuditLog.contractId, id));
     await tx.delete(contracts).where(eq(contracts.id, id));
   });
+
   return {
     success: true,
     id,
-    deletedAccruals: linkedAccruals.length,
+    detachedAccruals: linkedAccruals.length,
     deletedDocuments: linkedDocuments.length,
   };
 }
 
 export async function permanentlyDeleteContracts(ids: number[]) {
   if (!ids.length) throw new Error("Выберите хотя бы один договор");
-  let deletedAccruals = 0;
+  let detachedAccruals = 0;
   let deletedDocuments = 0;
   for (const id of ids) {
     const result = await permanentlyDeleteContract(id);
-    deletedAccruals += result.deletedAccruals;
+    detachedAccruals += result.detachedAccruals;
     deletedDocuments += result.deletedDocuments;
   }
   return {
     success: true,
     ids,
     deletedContracts: ids.length,
-    deletedAccruals,
+    detachedAccruals,
     deletedDocuments,
   };
 }
@@ -1052,18 +1046,12 @@ export async function listPermanentlyDeletableContractIds() {
   const db = await getDb();
   if (!db) return [];
 
-  // One grouped query instead of N+1 queries. A contract is eligible when none of
-  // its accruals has ever been attached to an invoice item. This endpoint is called
-  // on the contracts screen for administrators, so the old per-contract/per-accrual
-  // loop could turn into hundreds or thousands of DB round-trips and surface as a
-  // generic "Внутренняя ошибка сервера" under real production data.
+  // Permanent deletion is an Administrator-only operation and is allowed even when
+  // the contract has accruals or invoice items. The delete operation detaches the
+  // accruals so invoice and payment history remains intact.
   const rows = await db
     .select({ id: contracts.id })
-    .from(contracts)
-    .leftJoin(accruals, eq(accruals.contractId, contracts.id))
-    .leftJoin(invoiceItems, eq(invoiceItems.accrualId, accruals.id))
-    .groupBy(contracts.id)
-    .having(sql`COUNT(${invoiceItems.id}) = 0`);
+    .from(contracts);
 
   return rows.map(row => row.id);
 }
