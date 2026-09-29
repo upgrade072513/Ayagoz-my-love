@@ -355,9 +355,19 @@ function findTenantName(text: string) {
     if (name && !NOT_A_NAME.test(name))
       return { value: name, confidence: 0.85 };
   }
-  // Application for joining the contract: «прошу предоставить, Nancy Lee Stitt (паспорт № …)»
+  // «Заявитель: Ogwumeh Chukwuwike Mike» — the nominative form, better than «прошу предоставить мне Садибекову …»
+  const applicantLine = new RegExp(`Заявител\\p{L}*\\s*[:\\-]?\\s*${ANY_NAME}`, "u");
+  const lineName = clean(
+    flat
+      .match(applicantLine)?.[1]
+      // «Заявитель: Ogwumeh Chukwuwike Mike Подпись:» — the next line's label is not part of the name
+      ?.replace(/(?:\s+(?:Подпись|Телефон|Signature|Phone|Дата|Электрон\p{L}*|Email|Адрес|Қолы))+$/iu, "")
+  );
+  if (lineName && !NOT_A_NAME.test(lineName) && lineName.split(" ").length >= 2)
+    return { value: lineName, confidence: 0.85 };
+  // Application for joining the contract: «прошу предоставить (мне), Nancy Lee Stitt (паспорт № …)»
   const applicant = new RegExp(
-    `[Пп]рошу\\s+предостав\\p{L}*\\s*[,:]?\\s*${ANY_NAME}`,
+    `[Пп]рошу\\s+предостав\\p{L}*\\s*[,:]?\\s*(?:мне|нам)?\\s*,?\\s*${ANY_NAME}`,
     "u"
   );
   const applicantName = clean(flat.match(applicant)?.[1]);
@@ -414,11 +424,11 @@ const normalizePhone = (raw: string) => {
 function findMoney(text: string) {
   const flat = text.replace(/\s+/g, " ");
   const rate = flat.match(
-    /(?:из\s+расч[её]та|исходя\s+из|at\s+the\s+rate\s+of)\s*(?:ставки\s*)?(\d{1,3}(?:[ \u00a0]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu
+    /(?:из\s+расч[её]та|исходя\s+из|at\s+the\s+rate\s+of)\s*(?:ставки\s*)?(\d{1,3}(?:[ \u00a0.]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu
   );
   if (rate) {
     const amount =
-      Number(rate[1].replace(/[\s\u00a0]/g, "")) +
+      Number(rate[1].replace(/[\s\u00a0.]/g, "")) +
       (rate[2] ? Number(rate[2]) / 100 : 0);
     if (amount > 0)
       return {
@@ -461,7 +471,7 @@ type SchedulePart = {
 const D_ANY = `(?:${DATE_NUM.source}|${DATE_WORD.source}|${DATE_EN.source})`;
 // Day + month without a year: «с 01 августа по 31 октября 2026 года» — the year comes from the end date.
 const D_NO_YEAR = `«?\\s*\\d{1,2}\\s*»?\\s+[А-Яа-яЁё]{3,}(?!\\s+\\d{4})|\\d{1,2}\\s*[.\\/]\\s*\\d{1,2}(?!\\s*[.\\/-]?\\s*\\d)`;
-const RANGE_START = `(?<![\\p{L}\\d])(?:(?:с|c)\\s*(?=[«\\d])|(?:from|начиная\\s+с)\\s+)`;
+const RANGE_START = `(?:(?<![\\p{L}\\d])|(?<=(?:^|\\s)[eеЕE®•]))(?:(?:с|c)\\s*(?=[«\\d])|(?:from|начиная\\s+с)\\s+)`;
 const RANGE_PATTERNS = [
   new RegExp(
     `${RANGE_START}(?<a>${D_ANY}|${D_NO_YEAR})\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s+(?<b>${D_ANY})`,
@@ -485,7 +495,7 @@ const withYearOf = (partial: string, end: string | null) => {
   return date && date > end ? make(year - 1) : date;
 };
 const SCHEDULE_MONEY =
-  /(\d{1,3}(?:[  ]\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
+  /(\d{1,3}(?:[  .]\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
 // «… – 417 600 тенге, из расчета 139 200 тенге в месяц»: the monthly rate, not the period total.
 const RATE_MONEY = new RegExp(
   `(?:из\\s+расч[её]та|исходя\\s+из|at\\s+the\\s+rate\\s+of|based\\s+on)\\s*(?:ставки\\s*)?${SCHEDULE_MONEY.source}`,
@@ -495,7 +505,7 @@ const moneyIn = (window: string) => {
   const rate = window.match(RATE_MONEY);
   if (rate) {
     const amount =
-      Number(rate[1].replace(/[\s\u00a0]/g, "")) +
+      Number(rate[1].replace(/[\s\u00a0.]/g, "")) +
       (rate[2] ? Number(rate[2]) / 100 : 0);
     if (amount > 0)
       return { amount, index: rate.index ?? 0, length: rate[0].length };
@@ -506,7 +516,7 @@ const moneyIn = (window: string) => {
   if (/(общ\p{L}*|итого|всего|total|депозит|deposit|залог|штраф|пен[ия])/iu.test(before))
     return null;
   const amount =
-    Number(m[1].replace(/[  ]/g, "")) + (m[2] ? Number(m[2]) / 100 : 0);
+    Number(m[1].replace(/[  .]/g, "")) + (m[2] ? Number(m[2]) / 100 : 0);
   return amount > 0 ? { amount, index: m.index ?? 0, length: m[0].length } : null;
 };
 const typeIn = (window: string, fallback: "monthly" | "daily") =>
@@ -635,7 +645,7 @@ const stripPersonalIds = (text: string) =>
       " "
     )
     .replace(
-      /(?:паспорт\p{L}*|passport|удостоверени\p{L}*\s+личност\p{L}*)\s*(?:№|N[ºo°e]?|No\.?)?\s*[A-ZА-Я]?\d{6,12}(?:[^.\n]{0,40}?(?:от|выдан\p{L}*|issue\s+date)\s*[\d.\/-]{8,10})?/giu,
+      /(?:паспорт\p{L}*|passport|удостоверени\p{L}*\s+личност\p{L}*)\s*(?:№|N[ºo°e]?|No\.?)?\s*[A-ZА-Я]{0,2}\d{6,12}(?:[^.\n]{0,40}?(?:от|выдан\p{L}*|issue\s+date)\s*[\d.\/-]{8,10})?/giu,
       " "
     )
     .replace(/ИИН\s*:?\s*\d{12}/gu, " ");
@@ -657,7 +667,9 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     .replace(/[“”„]/g, '"')
     .replace(/[‐‑‒–—]/g, "-")
     .replace(/(^|[\s,])np\.\s*/gu, "$1пр. ")
-    .replace(/(^|[\s,])(?:kn|kв|кb)\.(?=\s*\d)/gu, "$1кв.");
+    .replace(/(^|[\s,])(?:kn|kв|кb)\.(?=\s*\d)/gu, "$1кв.")
+    // OCR doubles a zero in dates: «с 001 августа»
+    .replace(/(?<![\d.])0(0[1-9]|[12]\d|3[01])(?=\s+[А-Яа-яЁё]{3,})/gu, "$1");
   const flat = stripPersonalIds(text).replace(/\s+/g, " ");
   const fieldConfidence: Record<string, number> = {};
   const warnings: string[] = [];
@@ -817,24 +829,42 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     propertyName = clean(cut > 0 ? rest.slice(0, cut) : rest.slice(0, 120));
   }
   const addressMatch = propertyName;
-  const blockMatch = flat.match(
-    /(?<![\p{L}\d])(?:Блок\p{L}*|Block)\s*[№#]?\s*([A-ZА-Я]?\d{1,3}[A-ZА-Я]?)(?![\p{L}\d])/iu
+  // «Жилью №39 блока №308» in the application = block 39, apartment 308 (the words are in that order on the NU form).
+  const housing = flat.match(
+    /Жиль\p{L}*\s*№\s*(\S{1,4}?)\s*,?\s*блок\p{L}*\s*№\s*(\d{1,4})/iu
   );
+  const housingBlock = housing && /^\d{1,3}$/.test(housing[1]) ? housing[1] : null;
+  // Act: «Блок 39, квартира 408» / «Block 39, apt.908»
+  const actAddress = flat.match(
+    /(?<![\p{L}\d])(?:Блок|Block)\s*[№#]?\s*(\d{1,3})\s*,\s*(?:кв\.?|квартир\p{L}*|apt\.?|apartment|комнат\p{L}*|room)\s*№?\s*(\d{1,5})/iu
+  );
+  const blockMatch =
+    housingBlock != null
+      ? [housingBlock, housingBlock]
+      : actAddress
+        ? [actAddress[1], actAddress[1]]
+        : flat.match(
+            /(?<![\p{L}\d])(?:Блок\p{L}*|Block)\s*[№#]?\s*([A-ZА-Я]?\d{1,3}[A-ZА-Я]?)(?![\p{L}\d])/iu
+          );
   // OCR garbles the street name in mixed RU/EN lines («np.KaGauGaii батыра 53») — the campus address is well known.
   const addressZone =
     addressAt >= 0 ? flat.slice(addressAt, addressAt + 400) : "";
-  if (addressZone && CAMPUS_STREET.test(addressZone))
+  if ((addressZone && CAMPUS_STREET.test(addressZone)) || (housing && CAMPUS_STREET.test(flat)))
     propertyName = blockMatch
       ? `${CAMPUS_ADDRESS}, Блок ${blockMatch[1]}`
       : CAMPUS_ADDRESS;
   if (!propertyName && blockMatch) propertyName = `Блок ${blockMatch[1]}`;
   fieldConfidence.propertyName = propertyName
-    ? scale(addressMatch ? 0.75 : 0.5)
+    ? scale(addressMatch || housing || actAddress ? 0.75 : 0.5)
     : 0;
   const unitMatch = flat.match(
     /(?:комнат\p{L}*|квартир\p{L}*|(?<![\p{L}\d])кв\.|помещени\p{L}*|room|apt\.?|apartment|бөлме)\s*№?\s*([0-9]{1,5}[A-Za-zА-Яа-я]?(?:[\-\/][0-9A-Za-zА-Яа-я]+)?)/iu
   );
-  const unitName = clean(unitMatch?.[1]);
+  const unitName = clean(housing?.[2] ?? actAddress?.[2] ?? unitMatch?.[1]);
+  if (housing?.[2] && actAddress?.[2] && housing[2] !== actAddress[2])
+    warnings.push(
+      `Номер квартиры в заявлении (${housing[2]}) и в акте приёма-передачи (${actAddress[2]}) отличается — проверьте.`
+    );
   fieldConfidence.unitName = unitName ? scale(0.8) : 0;
 
   const status =
@@ -903,7 +933,7 @@ export function identityFromFileName(fileName?: string) {
   };
   if (!base) return empty;
   const dated = base.match(
-    /^(.*?)\s+(?:от|from)\s+(?:(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})|(\d{4})-(\d{1,2})-(\d{1,2}))\s*(?:г\.?|года?)?\s*(.*)$/iu
+    /^(.*?)\s+(?:от|from)\s+(?:(\d{1,2})[./\- ](\d{1,2})[./\- ](\d{4}|\d{2}(?!\d))|(\d{4})-(\d{1,2})-(\d{1,2}))\s*(?:г\.?|года?)?\s*(.*)$/iu
   );
   const numberPart = dated
     ? dated[1]
@@ -921,7 +951,7 @@ export function identityFromFileName(fileName?: string) {
     : null;
   const rest = dated?.[8] ?? "";
   const block = rest.match(
-    /(?<![\p{L}\d])(?:блок\s*(\d{2,3})|(\d{2,3})\s*блок)/iu
+    /(?<![\p{L}\d])(?:(?:блок|block)\s*(\d{1,3})|(\d{1,3})\s*(?:блок|block))/iu
   );
   // The name is what is left before words like «аренда», «блок», «кв», numbers.
   const nameRaw =
@@ -995,6 +1025,12 @@ export function mergeWithFileName(
   }
   if (id.block && out.propertyName && !/Блок/iu.test(out.propertyName))
     out.propertyName = `${out.propertyName}, Блок ${id.block}`;
+  // The manager typed the block into the file name — it beats a misread block on a scan.
+  const scannedBlock = out.propertyName?.match(/Блок\s*(\S+)/iu)?.[1];
+  if (id.block && usedOcr && scannedBlock && scannedBlock !== id.block) {
+    out.propertyName = out.propertyName!.replace(/Блок\s*\S+/iu, `Блок ${id.block}`);
+    out.fieldConfidence.propertyName = Math.max(out.fieldConfidence.propertyName ?? 0, 0.7);
+  }
   const found = Object.entries(out.fieldConfidence).filter(
     ([key, value]) => key !== "status" && value > 0
   );

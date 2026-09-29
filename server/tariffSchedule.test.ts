@@ -148,3 +148,64 @@ describe("contract input", async () => {
     ).toBe(false);
   });
 });
+
+describe("NU family-housing application (scans 374 and 377)", async () => {
+  const { mergeWithFileName, identityFromFileName } = await import("./localOcr");
+  // Real Tesseract output: bullet read as «ec», «с 001», «155.000», garbled «№3%блока».
+  const ocr374 = `Заявление о присоединении к договору об оказании услуг проживания
+Прошу предоставить мне Ogwumeh Chukwuwike Mike (гр. Республики  Нигерия, Паспорт
+NeA12907795 от 05.12.2023 года),                                   Студенту
+проживания по закрепленному Жилью №3%блока №308; расположенного по адресу Кабанбай батыра
+53, с условиями пользования имуществом
+Срок проживания: с «01» августа 2026 года по «30» июня 2027 года.
+Стоимость услуг проживания составляет:
+® с001 августа по 31 октября 2026 года — 417 600 (четыреста семнадцать тысяч шестьсот)
+тенге с учетом НДС, из расчета 139 200 (сто тридцать девять тысяч двести) тенге в
+месяц;
+ec 01 ноября 2026 года по 30 июня 2027 года — 1 240 000 (один миллион двести сорок
+тысяч) тенге с учетом НДС, из расчета 155.000 (сто пятьдесят пять тысяч) тенге в
+месяц.
+Общая стоимость услуг проживания за весь период составляет 1 657 600 тенге
+Заявитель: Ogwumeh Chukwuwike Mike
+Подпись:
+Телефон сотовый:
+Accepted the Housing located at: Kabanbai batyr ave. 53, Block 39, Apartment 408, Astana`;
+  it("reads name, block, apartment and both rates", () => {
+    const fileName = "374-2026 от 01 08 2026 Ogwumeh Chukwuwike Mike 39 block family.PDF";
+    const result = mergeWithFileName(parseContractText(ocr374, 0.6), fileName, true);
+    expect(result).toMatchObject({
+      contractNumber: "374-2026",
+      contractDate: "2026-08-01",
+      tenantName: "Ogwumeh Chukwuwike Mike",
+      propertyName: "г. Астана, пр. Кабанбай батыра 53, Блок 39",
+      unitName: "308",
+      startDate: "2026-08-01",
+      endDate: "2027-06-30",
+      tariffAmount: 139200,
+    });
+    expect(result.tariffSchedule.map(p => [p.from, p.to, p.amount])).toEqual([
+      ["2026-08-01", "2026-10-31", 139200],
+      ["2026-11-01", "2027-06-30", 155000],
+    ]);
+    // Application says 308, the act says 408 — the manager is warned.
+    expect(result.warnings.join(" ")).toMatch(/308.*408/);
+  });
+  it("file names with spaces in the date and an English «block»", () => {
+    expect(
+      identityFromFileName("377-2026 от 01 08 2026 Abdyrakhmankyzy Nargiza 39 block family.PDF")
+    ).toEqual({
+      contractNumber: "377-2026",
+      contractDate: "2026-08-01",
+      tenantName: "Abdyrakhmankyzy Nargiza",
+      block: "39",
+    });
+  });
+  it("a passport date is never the contract date", () => {
+    const result = parseContractText(
+      "Прошу предоставить мне Abdyrakhmankyzy Nargiza (гр. Республики Кыргызстан, Паспорт NeAC2971443 от 05.07.2017 года), Жилью №39 блока №908"
+    );
+    expect(result.contractDate).not.toBe("2017-07-05");
+    expect(result.tenantName).toBe("Abdyrakhmankyzy Nargiza");
+    expect(result.unitName).toBe("908");
+  });
+});
