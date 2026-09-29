@@ -11,6 +11,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { archiveExpiredContractsHandler } from "../scheduled";
 import { registerInvoicePdfRoute } from "../invoicePdf";
+import { registerDocumentFileRoute } from "../documentFile";
 
 /** Security middleware + every API route. The frontend is mounted afterwards by the caller. */
 export function registerApi(app: Express) {
@@ -22,6 +23,7 @@ export function registerApi(app: Express) {
   registerBodyParsers(app);
   app.get("/healthz", (_req, res) => res.json({ ok: true }));
   registerInvoicePdfRoute(app);
+  registerDocumentFileRoute(app);
   app.post(
     "/api/scheduled/archive-expired-contracts",
     archiveExpiredContractsHandler

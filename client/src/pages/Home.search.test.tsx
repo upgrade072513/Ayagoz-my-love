@@ -262,13 +262,23 @@ describe("section search wiring", () => {
     expect(mocks.moveToFolderMutate).toHaveBeenCalledWith({ ids: [1], folderName: "Блок А1" });
   });
 
-  it("opens an attached contract scan in the viewer", () => {
+  it("opens an attached contract scan in the viewer", async () => {
     mocks.documents = [{ id: 501, contractId: 1, fileName: "Д-001.pdf", mimeType: "application/pdf" }];
-    mocks.documentDownloadData = { fileName: "Д-001.pdf", mimeType: "application/pdf", dataBase64: "JVBERi0xLjQ=" };
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, headers: new Headers({ "Content-Type": "application/pdf" }), blob: async () => new Blob(["%PDF-1.4"], { type: "application/pdf" }), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:scan") as any;
+    URL.revokeObjectURL = vi.fn() as any;
     render(<Contracts />);
     fireEvent.click(screen.getByRole("button", { name: "Д-001.pdf" }));
     expect(screen.getByRole("dialog", { name: "Просмотр скана договора" })).toBeTruthy();
-    expect(screen.getByTitle("Д-001.pdf")).toBeTruthy();
+    expect(await screen.findByTitle("Д-001.pdf")).toBeTruthy();
+    // Plain binary endpoint, not base64 inside JSON.
+    expect((fetchMock.mock.calls[0] as any)[0]).toBe("/api/documents/501/file");
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    vi.unstubAllGlobals();
     fireEvent.click(screen.getByRole("button", { name: "Увеличить документ" }));
     expect(screen.getByText("125%")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Скачать скан" })).toBeTruthy();

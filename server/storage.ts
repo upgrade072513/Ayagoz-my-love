@@ -57,6 +57,8 @@ async function forgePresign(kind: "get" | "put", key: string) {
   url.searchParams.set("path", key);
   const resp = await fetch(url, {
     headers: { Authorization: `Bearer ${forgeKey}` },
+    // A dead storage service must fail fast instead of leaving the viewer spinning.
+    signal: AbortSignal.timeout(15_000),
   });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => resp.statusText);
