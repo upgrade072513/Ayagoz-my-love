@@ -412,3 +412,20 @@ tbody tr:has(> td:first-child input[type="checkbox"]:checked) { --row-bg: color-
 tbody tr:has(> td:first-child input[type="checkbox"]:checked) > td { background-color: var(--row-bg); }
 tbody tr:has(> td:first-child input[type="checkbox"]:checked) > td:first-child { box-shadow: inset 3px 0 0 var(--app-accent); }
 tbody td:first-child input[type="checkbox"] { width: 1.05rem; height: 1.05rem; cursor: pointer; }
+
+/* Horizontal scrollbar pinned to the bottom of the window for wide tables (FloatingScrollbar.tsx). */
+.floating-scrollbar {
+  position: fixed;
+  bottom: 0;
+  z-index: 35;
+  height: 16px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  background: var(--app-surface, #fff);
+  border-top: 1px solid rgba(120, 120, 128, 0.25);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+}
+.floating-scrollbar::-webkit-scrollbar { height: 15px; }
+.floating-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(120, 120, 128, 0.6); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
+.floating-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(120, 120, 128, 0.8); }
+.floating-scrollbar::-webkit-scrollbar-track { background: transparent; }
