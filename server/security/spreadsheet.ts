@@ -83,10 +83,7 @@ function cellValue(value: ExcelJS.CellValue): unknown {
   return String(value).slice(0, LIMITS.spreadsheetCellChars);
 }
 
-/** First worksheet as a matrix (like SheetJS sheet_to_json with header: 1, defval: ""). */
-export async function readFirstSheetMatrix(
-  buffer: Buffer
-): Promise<unknown[][]> {
+async function loadWorkbook(buffer: Buffer) {
   const zip = inspectZip(buffer);
   if (
     !zip.names.includes("[Content_Types].xml") ||
@@ -99,8 +96,12 @@ export async function readFirstSheetMatrix(
   } catch {
     throw new UploadRejected("Не удалось прочитать файл Excel");
   }
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new UploadRejected("В Excel-файле нет листов");
+  if (!workbook.worksheets.length)
+    throw new UploadRejected("В Excel-файле нет листов");
+  return workbook;
+}
+
+function sheetMatrix(sheet: ExcelJS.Worksheet): unknown[][] {
   if (sheet.rowCount > LIMITS.spreadsheetRows + 1)
     throw new UploadRejected(
       `В файле слишком много строк: максимум ${LIMITS.spreadsheetRows}`
@@ -121,6 +122,31 @@ export async function readFirstSheetMatrix(
   )
     matrix.pop();
   return matrix;
+}
+
+/** First worksheet as a matrix (like SheetJS sheet_to_json with header: 1, defval: ""). */
+export async function readFirstSheetMatrix(
+  buffer: Buffer
+): Promise<unknown[][]> {
+  const workbook = await loadWorkbook(buffer);
+  return sheetMatrix(workbook.worksheets[0]);
+}
+
+/** Every worksheet (up to 24) as { name, matrix }. */
+export async function readAllSheetMatrices(
+  buffer: Buffer
+): Promise<Array<{ name: string; matrix: unknown[][] }>> {
+  const workbook = await loadWorkbook(buffer);
+  let total = 0;
+  return workbook.worksheets.slice(0, 24).map(sheet => {
+    const matrix = sheetMatrix(sheet);
+    total += matrix.length;
+    if (total > LIMITS.spreadsheetRows * 2)
+      throw new UploadRejected(
+        `В файле слишком много строк: максимум ${LIMITS.spreadsheetRows * 2}`
+      );
+    return { name: sheet.name, matrix };
+  });
 }
 
 /** Header row → objects (like SheetJS sheet_to_json with defval: ""), safe against prototype pollution. */

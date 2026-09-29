@@ -429,3 +429,20 @@ tbody td:first-child input[type="checkbox"] { width: 1.05rem; height: 1.05rem; c
 .floating-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(120, 120, 128, 0.6); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
 .floating-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(120, 120, 128, 0.8); }
 .floating-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+/* Contracts register: compact columns (long names, addresses and file names wrap instead of stretching the table). */
+.contracts-data-table { min-width: 1080px !important; }
+.contracts-data-table th,
+.contracts-data-table td { padding-left: 12px !important; padding-right: 12px !important; }
+.contracts-data-table th,
+.contracts-data-table td { min-width: 0 !important; }
+.contracts-data-table th:first-child,
+.contracts-data-table td:first-child { width: 40px; }
+.contracts-data-table thead th { white-space: normal !important; line-height: 1.25; vertical-align: bottom; }
+.contracts-data-table td.col-wrap { white-space: normal !important; }
+.contracts-data-table td .whitespace-normal-badge { white-space: normal; }
+.contracts-data-table td.col-tenant { min-width: 170px !important; max-width: 230px; }
+.contracts-data-table td.col-object { min-width: 200px !important; max-width: 260px; }
+.contracts-data-table td.col-docs { min-width: 220px !important; max-width: 290px; }
+.contracts-data-table td.col-actions { min-width: 0; width: 1%; }
+.contracts-data-table td.col-actions button { height: 28px; padding-left: 8px; padding-right: 8px; }

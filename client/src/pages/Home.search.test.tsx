@@ -32,6 +32,8 @@ vi.mock("@/lib/trpc", () => {
       permanentDeleteEligible: { useQuery: () => ({ data: [] }) },
       permanentlyDelete: { useMutation },
       permanentlyDeleteMany: { useMutation },
+      previewEmailImport: { useMutation },
+      applyEmailImport: { useMutation },
       createFromScan: { useMutation: () => ({ mutate: mocks.createFromScanMutate, mutateAsync: mocks.createFromScanMutateAsync, isPending: false }) },
       previewImport: { useMutation },
       importRows: { useMutation },

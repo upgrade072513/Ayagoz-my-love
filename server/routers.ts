@@ -115,7 +115,8 @@ import {
   reset as resetRateLimit,
   RULES,
 } from "./security/rateLimit";
-import { readFirstSheetMatrix } from "./security/spreadsheet";
+import { readAllSheetMatrices, readFirstSheetMatrix } from "./security/spreadsheet";
+import { extractEmailRows, planEmailUpdate } from "./emailImport";
 import {
   establishSession,
   generateTemporaryPassword,
@@ -1313,6 +1314,79 @@ export const appRouter = router({
         return ctx.user.role === "admin"
           ? rows
           : rows.filter(row => canManageContract(ctx.user, row));
+      }),
+    /** Mass e-mail update from an Excel list: preview only, nothing is written. */
+    previewEmailImport: protectedProcedure
+      .input(
+        z.object({
+          dataUrl: dataUrlSchema(LIMITS.spreadsheetBytes),
+          overwrite: z.boolean().default(false),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для изменения договоров"
+        );
+        await enforce(RULES.spreadsheetParse, rateKey("user", ctx.user.id));
+        const upload = decodeSpreadsheetUpload(input.dataUrl);
+        const source = extractEmailRows(await readAllSheetMatrices(upload.buffer));
+        if (!source.length)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "В файле не найдено строк с адресами: нужен столбец «E-mail» и столбец «ФИО» или «Statement»/«Договор».",
+          });
+        const rows = await listContracts(true);
+        const visible =
+          ctx.user.role === "admin"
+            ? rows
+            : rows.filter(row => canManageContract(ctx.user, row));
+        return planEmailUpdate(source, visible as any, { overwrite: input.overwrite });
+      }),
+    applyEmailImport: protectedProcedure
+      .input(
+        z.object({
+          changes: z
+            .array(
+              z.object({
+                contractId: idSchema,
+                email: z.string().trim().toLowerCase().email("Некорректный Email").max(320),
+              })
+            )
+            .min(1)
+            .max(2000),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для изменения договоров"
+        );
+        let updated = 0;
+        const failed: Array<{ contractId: number; message: string }> = [];
+        for (const change of input.changes) {
+          try {
+            const contract = await requireContractById(ctx.user, change.contractId);
+            const saved = await updateContract(contract.id, { tenantEmail: change.email });
+            if (saved) await recalculateDraftAccrualsForContract(saved);
+            await recordContractAudit({
+              contractId: contract.id,
+              actorUserId: ctx.user.id,
+              action: "updated",
+              details: `Email из Excel: ${contract.tenantEmail || "—"} → ${change.email}`,
+            });
+            updated++;
+          } catch (error) {
+            failed.push({
+              contractId: change.contractId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return { updated, failed };
       }),
     audit: protectedProcedure
       .input(z.object({ contractId: idSchema }))
