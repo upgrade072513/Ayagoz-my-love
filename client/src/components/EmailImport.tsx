@@ -12,10 +12,14 @@ type Plan = {
     block: string | null;
     oldEmail: string | null;
     newEmail: string;
-    matchedBy: "contractNumber" | "name" | "name+apartment" | "apartment";
+    matchedBy: "contractNumber" | "name" | "name+apartment" | "similarName" | "apartment";
     source: string;
+    sourceName?: string;
     conflict?: string;
+    review?: string;
   }>;
+  listedWithoutEmail: Array<{ contractId: number; contractNumber: string | null; tenantName: string; source: string }>;
+  notInFile: Array<{ contractId: number; contractNumber: string | null; tenantName: string; block: string | null; unit: string | null }>;
   unchanged: number;
   keptExisting: number;
   unmatched: Array<{ sheet: string; row: number; name: string; email: string; contractNumber: string | null; block: string | null; unit: string | null }>;
@@ -29,6 +33,7 @@ const MATCHED_BY: Record<Plan["changes"][number]["matchedBy"], string> = {
   contractNumber: "по номеру договора",
   name: "по ФИО",
   "name+apartment": "по ФИО и квартире",
+  similarName: "по похожему ФИО (латиница/кириллица)",
   apartment: "по блоку и квартире — проверьте",
 };
 
@@ -55,7 +60,7 @@ export function EmailImportButton() {
       const next = result as Plan;
       setPlan(next);
       // Uncertain matches (by apartment only, conflicting addresses) start unticked.
-      setSelected(new Set(next.changes.filter(change => change.matchedBy !== "apartment" && !change.conflict).map(change => change.contractId)));
+      setSelected(new Set(next.changes.filter(change => !change.review && !change.conflict).map(change => change.contractId)));
     },
     onError: error => toast.error(error.message),
   });
@@ -159,7 +164,7 @@ export function EmailImportButton() {
                   </thead>
                   <tbody>
                     {plan.changes.map(change => (
-                      <tr key={change.contractId} className={"border-b border-slate-100 " + (change.matchedBy === "apartment" || change.conflict ? "bg-amber-50" : "")}>
+                      <tr key={change.contractId} className={"border-b border-slate-100 " + (change.review || change.conflict ? "bg-amber-50" : "")}>
                         <td className="px-4 py-2">
                           <input type="checkbox" aria-label={`Записать email для ${change.tenantName}`} checked={selected.has(change.contractId)} onChange={() => toggle(change.contractId)} />
                         </td>
@@ -172,9 +177,11 @@ export function EmailImportButton() {
                         <td className="px-3 py-2 font-medium text-slate-900">
                           {change.newEmail}
                           {change.conflict && <div className="text-xs font-normal text-amber-700">{change.conflict}</div>}
+                          {change.review && <div className="text-xs font-normal text-amber-700">{change.review}</div>}
                         </td>
                         <td className="px-3 py-2 text-xs text-slate-500">
                           {MATCHED_BY[change.matchedBy]}
+                          {change.sourceName && change.sourceName !== change.tenantName && <div className="text-slate-400">в файле: {change.sourceName}</div>}
                           <div className="text-slate-400">{change.source}</div>
                         </td>
                       </tr>
@@ -195,7 +202,7 @@ export function EmailImportButton() {
                     <ul className="mt-2 space-y-1 text-xs text-slate-600">
                       {plan.ambiguous.map(row => (
                         <li key={`a${row.sheet}${row.row}`} className="text-amber-700">
-                          {row.name} — {row.email}: найдено {row.candidates} договора в разных квартирах, впишите вручную ({row.sheet}, строка {row.row})
+                          {row.name} — {row.email}: несколько договоров с таким ФИО в разных квартирах, впишите вручную ({row.sheet}, строка {row.row})
                         </li>
                       ))}
                       {plan.unmatched.map(row => (
@@ -212,8 +219,41 @@ export function EmailImportButton() {
                 </div>
               )}
             </div>
+            {(plan.listedWithoutEmail.length > 0 || plan.notInFile.length > 0) && (
+              <details className="border-t border-slate-200 px-5 py-3 text-sm">
+                <summary className="cursor-pointer font-medium text-slate-800">
+                  Почему у договоров останется пустой email: {plan.listedWithoutEmail.length + plan.notInFile.length}
+                </summary>
+                {plan.listedWithoutEmail.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold text-slate-600">Есть в файле, но в столбце E-mail пусто ({plan.listedWithoutEmail.length}):</p>
+                    <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                      {plan.listedWithoutEmail.map(item => (
+                        <li key={`l${item.contractId}`}>
+                          {item.contractNumber || "без номера"} — {item.tenantName} ({item.source})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {plan.notInFile.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold text-slate-600">Не найдены в файле ни по номеру договора, ни по ФИО, ни по блоку и квартире ({plan.notInFile.length}):</p>
+                    <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                      {plan.notInFile.map(item => (
+                        <li key={`n${item.contractId}`}>
+                          {item.contractNumber || "без номера"} — {item.tenantName}
+                          {item.block ? ` · блок ${item.block}` : " · блок не определён"}
+                          {item.unit ? `, кв. ${item.unit}` : ", квартира не указана"}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </details>
+            )}
             <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">
-              <span className="text-xs text-slate-500">Договоров без email после записи: {Math.max(0, plan.withoutEmail)}</span>
+              <span className="text-xs text-slate-500">Останутся без email: {Math.max(0, plan.withoutEmail)}</span>
               <div className="flex gap-2">
                 <Button variant="ghost" onClick={close}>
                   Отмена
