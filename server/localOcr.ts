@@ -467,6 +467,7 @@ type SchedulePart = {
   to: string | null;
   tariffType: "monthly" | "daily";
   amount: number;
+  units?: number;
 };
 const D_ANY = `(?:${DATE_NUM.source}|${DATE_WORD.source}|${DATE_EN.source})`;
 // Day + month without a year: «с 01 августа по 31 октября 2026 года» — the year comes from the end date.
@@ -527,6 +528,64 @@ const typeIn = (window: string, fallback: "monthly" | "daily") =>
       : fallback;
 const dayBefore = (iso: string) =>
   new Date(Date.parse(`${iso}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+/**
+ * Group/bed booking: «Стоимость 1-го койко-места … в сутки: 5 500»,
+ * «Стоимость проживания за 3 (три) койко-мест в период с 27 августа по 29 августа: 49 500».
+ * Each line becomes units × days × rate; the line total from the document is used to check (or derive) the rate.
+ */
+export function findBedLines(
+  flat: string,
+  term: { startDate: string | null; endDate: string | null; contractDate: string | null }
+): { lines: SchedulePart[]; mismatch: string | null } {
+  const empty = { lines: [] as SchedulePart[], mismatch: null };
+  const BED = "ко[йи]ко[\\s-]*мест\\p{L}*";
+  const MONEY = `(\\d{1,3}(?:[ \\u00a0.]\\d{3})+|\\d{3,7})(?:[.,](\\d{2}))?`;
+  const toNumber = (int: string, dec?: string) =>
+    Number(int.replace(/[\s .]/g, "")) + (dec ? Number(dec) / 100 : 0);
+  const rateMatch = flat.match(
+    new RegExp(`(?:1|одного|одно)?[^.:]{0,6}${BED}[^:]{0,90}?(в\\s+сутки|за\\s+сутки|в\\s+день|в\\s+месяц|за\\s+месяц|per\\s+day|per\\s+month)\\s*:?\\s*${MONEY}`, "iu")
+  );
+  const rate = rateMatch ? toNumber(rateMatch[2], rateMatch[3]) : null;
+  const tariffType: "monthly" | "daily" =
+    rateMatch && /месяц|month/iu.test(rateMatch[1]) ? "monthly" : "daily";
+  const LINE = new RegExp(
+    `за\\s+(\\d{1,4})\\s*(?:\\([^)]{0,40}\\)\\s*)?${BED}\\s+(?:в\\s+период\\s+)?с\\s*(?<from>${D_ANY}|${D_NO_YEAR})\\s*(?:г\\.?|года)?\\s*(?:по|до)\\s+(?<to>${D_ANY}|${D_NO_YEAR})\\s*(?:г\\.?|года)?\\s*:?\\s*[-–—]?\\s*(?<int>\\d{1,3}(?:[ \\u00a0.]\\d{3})+|\\d{3,7})(?:[.,](?<dec>\\d{2}))?`,
+    "giu"
+  );
+  const yearHint = term.startDate ?? term.contractDate ?? term.endDate;
+  const withYear = (value: string, hint: string | null) =>
+    parseDate(value) ?? (hint ? withYearOf(value, `${hint.slice(0, 4)}-12-31`) : null);
+  const lines: SchedulePart[] = [];
+  const problems: string[] = [];
+  for (const m of flat.matchAll(LINE)) {
+    const units = Number(m[1]);
+    const g = m.groups ?? {};
+    const to = withYear(g.to ?? "", yearHint);
+    const from = withYear(g.from ?? "", to ?? yearHint);
+    const total = toNumber(g.int ?? "0", g.dec);
+    if (!from || !to || from > to || !(units >= 1)) continue;
+    const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+    let lineRate = rate;
+    if (tariffType === "daily") {
+      const derived = total / (units * days);
+      if (!lineRate) lineRate = Math.round(derived * 100) / 100;
+      else if (Math.abs(units * days * lineRate - total) > 1)
+        problems.push(
+          `${units} мест × ${days} дн. × ${lineRate.toLocaleString("ru-RU")} ₸ = ${(units * days * lineRate).toLocaleString("ru-RU")} ₸, а в документе ${total.toLocaleString("ru-RU")} ₸`
+        );
+    }
+    if (!lineRate || lineRate <= 0) continue;
+    lines.push({ from, to, tariffType, amount: lineRate, ...(units > 1 ? { units } : {}) });
+  }
+  if (!lines.length) return empty;
+  return {
+    lines,
+    mismatch: problems.length
+      ? `Суммы в документе не сходятся с расчётом «места × дни × ставка»: ${problems.join("; ")} — проверьте.`
+      : null,
+  };
+}
 
 export function findTariffSchedule(
   flat: string,
@@ -793,12 +852,17 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
   let tariffTypeValue = tariffType;
 
   // A rate that changes during the term overrides the single «Стоимость … N тенге».
-  const schedule = findTariffSchedule(stripPersonalIds(text).replace(/\s+/g, " "), (tariffType ?? "monthly") as "monthly" | "daily", { startDate, endDate });
-  let tariffSchedule: Array<{ from: string; to: string; tariffType: "monthly" | "daily"; amount: number }> = [];
+  // Bed booking («за 3 койко-мест в период с 27 по 29 августа: 49 500») goes first, then a change of rate.
+  const scheduleText = stripPersonalIds(text).replace(/\s+/g, " ");
+  const beds = findBedLines(scheduleText, { startDate, endDate, contractDate });
+  const schedule = beds.lines.length
+    ? beds.lines
+    : findTariffSchedule(scheduleText, (tariffType ?? "monthly") as "monthly" | "daily", { startDate, endDate });
+  let tariffSchedule: Array<{ from: string; to: string; tariffType: "monthly" | "daily"; amount: number; units?: number }> = [];
   if (schedule.length) {
     tariffSchedule = schedule.map(p => ({ ...p, to: p.to as string }));
-    if (!startDate) startDate = tariffSchedule[0].from;
-    if (!endDate) endDate = tariffSchedule[tariffSchedule.length - 1].to;
+    if (!startDate) startDate = tariffSchedule.reduce((min, p) => (p.from < min ? p.from : min), tariffSchedule[0].from);
+    if (!endDate) endDate = tariffSchedule.reduce((max, p) => (p.to > max ? p.to : max), tariffSchedule[0].to);
     const first =
       tariffSchedule.find(p => startDate && p.from <= startDate && startDate <= p.to) ??
       tariffSchedule[0];
@@ -807,9 +871,16 @@ export function parseContractText(rawText: string, ocrConfidence = 0.9) {
     fieldConfidence.tariffAmount = scale(0.75);
     fieldConfidence.tariffType = scale(0.75);
     fieldConfidence.tariffSchedule = scale(0.7);
-    warnings.push(
-      `Тариф меняется в течение срока (${tariffSchedule.length} периода) — проверьте периоды и суммы.`
-    );
+    if (beds.lines.length) {
+      const places = tariffSchedule.reduce((sum, p) => sum + (p.units ?? 1), 0);
+      warnings.push(
+        `Расчёт по койко-местам: ${tariffSchedule.length} строк(и), всего мест ${places} — проверьте количество мест, периоды и ставку.`
+      );
+      if (beds.mismatch) warnings.push(beds.mismatch);
+    } else
+      warnings.push(
+        `Тариф меняется в течение срока (${tariffSchedule.length} периода) — проверьте периоды и суммы.`
+      );
   }
 
   // Address and room
@@ -1027,7 +1098,12 @@ export function mergeWithFileName(
     out.propertyName = `${out.propertyName}, Блок ${id.block}`;
   // The manager typed the block into the file name — it beats a misread block on a scan.
   const scannedBlock = out.propertyName?.match(/Блок\s*(\S+)/iu)?.[1];
-  if (id.block && usedOcr && scannedBlock && scannedBlock !== id.block) {
+  if (id.block && scannedBlock && /[A-Za-zА-Яа-я]/u.test(scannedBlock) && scannedBlock !== id.block)
+    // «Блок D1» on the scan vs «11 блок» in the file name: a lettered block is not an OCR slip — keep it, but ask.
+    out.warnings.push(
+      `На скане «Блок ${scannedBlock}», в имени файла — блок ${id.block}. Проверьте блок.`
+    );
+  else if (id.block && usedOcr && scannedBlock && scannedBlock !== id.block) {
     out.propertyName = out.propertyName!.replace(/Блок\s*\S+/iu, `Блок ${id.block}`);
     out.fieldConfidence.propertyName = Math.max(out.fieldConfidence.propertyName ?? 0, 0.7);
   }

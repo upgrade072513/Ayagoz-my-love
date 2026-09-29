@@ -11,6 +11,7 @@ import {
 import { storagePut } from "./storage";
 import { calculateAccrual, describeAccrualParts } from "@shared/accrual";
 import {
+  isMeaningfulSchedule,
   parseTariffSchedule,
   validateTariffSchedule,
 } from "@shared/tariffSchedule";
@@ -351,7 +352,10 @@ const tariffNote = (
 ): { notes?: string | null } => {
   const note = describeAccrualParts(parts);
   if (note) return { notes: note };
-  return current?.startsWith(TARIFF_NOTE_PREFIX) ? { notes: null } : {};
+  return current?.startsWith(TARIFF_NOTE_PREFIX) ||
+    current?.startsWith("Расчёт по койко-местам")
+    ? { notes: null }
+    : {};
 };
 const recalculateDraftAccrualsForContract = async (contract: any) => {
   const rows = (await listAccruals()).filter(
@@ -443,6 +447,7 @@ const tariffPeriodSchema = z.object({
   to: isoDate,
   tariffType: z.enum(["monthly", "daily"]),
   amount: money,
+  units: z.number().int().min(1).max(1000).optional(),
 });
 export const contractInput = z
   .object({
@@ -571,9 +576,10 @@ const scanResultSchema = {
           from: { type: "string", description: "YYYY-MM-DD" },
           to: { type: "string", description: "YYYY-MM-DD" },
           tariffType: { type: "string", enum: ["monthly", "daily"] },
-          amount: { type: "number" },
+          amount: { type: "number", description: "Ставка за 1 место в месяц/сутки" },
+          units: { type: "number", description: "Количество койко-мест (1, если не указано)" },
         },
-        required: ["from", "to", "tariffType", "amount"],
+        required: ["from", "to", "tariffType", "amount", "units"],
         additionalProperties: false,
       },
     },
@@ -634,6 +640,7 @@ const scanResultValidator = z.object({
         to: z.string(),
         tariffType: z.enum(["monthly", "daily"]),
         amount: z.number(),
+        units: z.number().optional(),
       })
     )
     .default([]),
@@ -748,14 +755,14 @@ const normalizeScanSchedule = (out: any) => {
     Array.isArray(out.tariffSchedule) ? out.tariffSchedule : [],
     out.tariffType === "daily" ? "daily" : "monthly"
   );
-  if (list.length < 2) return [];
-  if (new Set(list.map(p => `${p.tariffType}:${p.amount}`)).size < 2) return [];
+  if (!isMeaningfulSchedule(list)) return [];
   if (validateTariffSchedule(list).length) return [];
   // The first period's rate is the contract's base rate.
   if (out.tariffAmount == null) out.tariffAmount = list[0].amount;
   if (out.tariffType == null) out.tariffType = list[0].tariffType;
   if (!out.startDate) out.startDate = list[0].from;
-  if (!out.endDate) out.endDate = list[list.length - 1].to;
+  if (!out.endDate)
+    out.endDate = list.reduce((max, p) => (p.to > max ? p.to : max), list[0].to);
   return list;
 };
 /** Models sometimes omit keys, send numbers as strings or unknown enum values — normalise before strict validation. */

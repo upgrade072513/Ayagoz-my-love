@@ -1,12 +1,19 @@
 // A contract whose rate changes during its term («с 01.09 по 31.12 — 150 000 ₸/мес, с 01.01 по 30.06 — 165 000 ₸/мес»).
-// Stored on the contract as a JSON list of periods; days not covered by any period use the contract's base tariff.
+// Also bed bookings («за 3 койко-места с 27 по 29 августа по 5 500 ₸ в сутки»): each line is billed as
+// units × days × rate, lines may overlap and are added up.
+// Stored on the contract as a JSON list of lines; days not covered by any line use the contract's base tariff.
 export type TariffType = "monthly" | "daily";
 export type TariffPeriod = {
   from: string; // YYYY-MM-DD, inclusive
   to: string; // YYYY-MM-DD, inclusive
   tariffType: TariffType;
   amount: number;
+  /** Number of beds/places billed on this line (койко-мест); 1 when omitted. */
+  units?: number;
 };
+
+export const unitsOf = (period: Pick<TariffPeriod, "units">) =>
+  period.units && period.units > 0 ? period.units : 1;
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const validDate = (value: unknown): string | null => {
@@ -56,7 +63,14 @@ export function parseTariffSchedule(
     const type = entry.tariffType === "daily" || entry.tariffType === "monthly"
       ? (entry.tariffType as TariffType)
       : fallbackType;
-    periods.push({ from, to, tariffType: type, amount });
+    const unitsRaw = Number(entry.units ?? entry.beds ?? 1);
+    const units =
+      Number.isInteger(unitsRaw) && unitsRaw >= 1 && unitsRaw <= 1000 ? unitsRaw : 1;
+    periods.push(
+      units === 1
+        ? { from, to, tariffType: type, amount }
+        : { from, to, tariffType: type, amount, units }
+    );
   }
   return periods.sort((a, b) => a.from.localeCompare(b.from));
 }
@@ -72,14 +86,29 @@ export function validateTariffSchedule(
     const p = sorted[i];
     if (p.from > p.to)
       errors.push(`Период тарифа ${p.from} — ${p.to}: дата начала позже окончания`);
-    if (i > 0 && p.from <= sorted[i - 1].to)
-      errors.push(`Периоды тарифа пересекаются: ${sorted[i - 1].from} — ${sorted[i - 1].to} и ${p.from} — ${p.to}`);
     if (contract?.startDate && p.to < contract.startDate)
       errors.push(`Период тарифа ${p.from} — ${p.to} раньше начала договора`);
     if (contract?.endDate && p.from > contract.endDate)
       errors.push(`Период тарифа ${p.from} — ${p.to} позже окончания договора`);
   }
   return errors;
+}
+
+/** Lines that overlap in time — their sums are added (bed bookings); shown as a hint, not an error. */
+export function overlappingPeriods(periods: TariffPeriod[]) {
+  const sorted = [...periods].sort((a, b) => a.from.localeCompare(b.from));
+  return sorted.some((p, i) => i > 0 && p.from <= sorted[i - 1].to);
+}
+
+/** Worth keeping: a real change of rate, several places, or several people/beds at once. */
+export function isMeaningfulSchedule(periods: TariffPeriod[]) {
+  if (!periods.length) return false;
+  if (periods.some(p => unitsOf(p) > 1)) return true;
+  if (periods.length < 2) return false;
+  return (
+    overlappingPeriods(periods) ||
+    new Set(periods.map(p => `${p.tariffType}:${p.amount}`)).size > 1
+  );
 }
 
 /** JSON for the database; null when there is no change of rate. */
@@ -104,7 +133,7 @@ export function describeTariffSchedule(periods: TariffPeriod[]) {
   return periods
     .map(
       p =>
-        `${fmt(p.from)}–${fmt(p.to)}: ${p.amount.toLocaleString("ru-RU")} ₸/${p.tariffType === "daily" ? "сутки" : "мес"}`
+        `${fmt(p.from)}–${fmt(p.to)}: ${unitsOf(p) > 1 ? `${unitsOf(p)} мест × ` : ""}${p.amount.toLocaleString("ru-RU")} ₸/${p.tariffType === "daily" ? "сутки" : "мес"}`
     )
     .join("; ");
 }

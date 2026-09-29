@@ -50,12 +50,12 @@ describe("tariff that changes during the term", () => {
     expect(calculateAccrual(partial, "2027-02")?.amount).toBe(200000);
   });
 
-  it("rejects overlapping periods and drops garbage", () => {
+  it("rejects periods outside the term and drops garbage", () => {
     expect(
-      validateTariffSchedule([
-        { from: "2026-09-01", to: "2026-12-31", tariffType: "monthly", amount: 1 },
-        { from: "2026-12-01", to: "2027-01-31", tariffType: "monthly", amount: 2 },
-      ])
+      validateTariffSchedule(
+        [{ from: "2028-09-01", to: "2028-12-31", tariffType: "monthly", amount: 1 }],
+        { startDate: "2026-09-01", endDate: "2027-06-30" }
+      )
     ).toHaveLength(1);
     expect(parseTariffSchedule("not json")).toEqual([]);
     expect(
@@ -127,7 +127,7 @@ describe("contract input", async () => {
     tariffType: "monthly" as const,
     tariffAmount: 150000,
   };
-  it("accepts a consistent schedule and rejects overlapping periods", () => {
+  it("accepts a consistent schedule and rejects a period outside the term", () => {
     expect(
       contractInput.safeParse({
         ...base,
@@ -142,7 +142,7 @@ describe("contract input", async () => {
         ...base,
         tariffSchedule: [
           { from: "2026-09-01", to: "2027-01-31", tariffType: "monthly", amount: 150000 },
-          { from: "2027-01-01", to: "2027-06-30", tariffType: "monthly", amount: 165000 },
+          { from: "2028-01-01", to: "2028-06-30", tariffType: "monthly", amount: 165000 },
         ],
       }).success
     ).toBe(false);
@@ -207,5 +207,61 @@ Accepted the Housing located at: Kabanbai batyr ave. 53, Block 39, Apartment 408
     expect(result.contractDate).not.toBe("2017-07-05");
     expect(result.tenantName).toBe("Abdyrakhmankyzy Nargiza");
     expect(result.unitName).toBe("908");
+  });
+});
+
+describe("bed booking: places × days × rate (scans 0515 and 0516)", () => {
+  const text0515 = `Срок проживания с 27 августа 2026 года по 30 августа 2026 года.
+Стоимость 1-го койко-места в четырехместной комнате в сутки: 5 500 (пять тысяч пятьсот) тенге с учетом НДС;
+Стоимость проживания за 3 (три) койко-мест в период с 27 августа по 29 августа: 49 500 (тридцать три тысячи) тенге с учетом НДС;
+Стоимость проживания за 13 (тринадцать) койко-мест в период с 27 августа по 30 августа: 286 000 (двести восемьдесят шесть тысяч) тенге с учетом НДС;
+Итого стоимость услуг проживания: 335 500 (триста тридцать пять тысяч пятьсот) тенге с учетом НДС.`;
+  it("reads every line with its number of places", () => {
+    const result = parseContractText(text0515);
+    expect(result).toMatchObject({
+      startDate: "2026-08-27",
+      endDate: "2026-08-30",
+      tariffType: "daily",
+      tariffAmount: 5500,
+    });
+    expect(result.tariffSchedule).toEqual([
+      { from: "2026-08-27", to: "2026-08-29", tariffType: "daily", amount: 5500, units: 3 },
+      { from: "2026-08-27", to: "2026-08-30", tariffType: "daily", amount: 5500, units: 13 },
+    ]);
+    expect(result.warnings.join(" ")).toMatch(/койко-мест/);
+    expect(result.warnings.join(" ")).not.toMatch(/не сходятся/);
+  });
+  it("the accrual is places × days × rate for each line", () => {
+    const result = calculateAccrual(
+      {
+        startDate: "2026-08-27",
+        endDate: "2026-08-30",
+        tariffType: "daily",
+        tariffAmount: 5500,
+        tariffSchedule: parseContractText(text0515).tariffSchedule,
+      },
+      "2026-08"
+    )!;
+    expect(result.amount).toBe(335500);
+    expect(result.quantity).toBe(3 * 3 + 13 * 4); // bed-days
+    expect(describeAccrualParts(result.parts)?.replace(/\s/g, " ")).toContain("13 мест × 4 дн. × 5 500 ₸/сутки = 286 000");
+  });
+  it("two single places for different dates (0516) add up", () => {
+    const result = parseContractText(
+      "Срок проживания с 27 августа 2026 года по 30 августа 2026 года. Стоимость 1-10 койко-места в четырехместной комнате в сутки: 5 500 тенге; Стоимость проживания за 1 (одно) койко-мест в период с 27 августа по 29 августа: 16 500 тенге; Стоимость проживания за 1 (одно) койко-мест в период с 27 августа по 30 августа: 22 000 тенге"
+    );
+    expect(result.tariffSchedule).toHaveLength(2);
+    expect(
+      calculateAccrual(
+        { startDate: "2026-08-27", endDate: "2026-08-30", tariffType: "daily", tariffAmount: 5500, tariffSchedule: result.tariffSchedule },
+        "2026-08"
+      )?.amount
+    ).toBe(38500);
+  });
+  it("warns when the document's line total does not match", () => {
+    const result = parseContractText(
+      "Срок проживания с 27 августа 2026 года по 30 августа 2026 года. Стоимость 1-го койко-места в сутки: 5 500 тенге; Стоимость проживания за 3 (три) койко-мест в период с 27 августа по 29 августа: 50 000 тенге"
+    );
+    expect(result.warnings.join(" ")).toMatch(/не сходятся/);
   });
 });
