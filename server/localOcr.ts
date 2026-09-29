@@ -413,6 +413,20 @@ const normalizePhone = (raw: string) => {
 
 function findMoney(text: string) {
   const flat = text.replace(/\s+/g, " ");
+  const rate = flat.match(
+    /(?:из\s+расч[её]та|исходя\s+из|at\s+the\s+rate\s+of)\s*(?:ставки\s*)?(\d{1,3}(?:[ \u00a0]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu
+  );
+  if (rate) {
+    const amount =
+      Number(rate[1].replace(/[\s\u00a0]/g, "")) +
+      (rate[2] ? Number(rate[2]) / 100 : 0);
+    if (amount > 0)
+      return {
+        amount,
+        confidence: 0.85,
+        tail: flat.slice(rate.index ?? 0, (rate.index ?? 0) + rate[0].length + 80),
+      };
+  }
   const priceContext =
     /(стоимост\p{L}*|плат\p{L}*|ставк\p{L}*|тариф\p{L}*|сумм\p{L}*|составляет|fee|rate|price|cost)[^.]{0,120}?(\d{1,3}(?:[  ]?\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
   const match =
@@ -445,21 +459,47 @@ type SchedulePart = {
   amount: number;
 };
 const D_ANY = `(?:${DATE_NUM.source}|${DATE_WORD.source}|${DATE_EN.source})`;
+// Day + month without a year: «с 01 августа по 31 октября 2026 года» — the year comes from the end date.
+const D_NO_YEAR = `«?\\s*\\d{1,2}\\s*»?\\s+[А-Яа-яЁё]{3,}(?!\\s+\\d{4})|\\d{1,2}\\s*[.\\/]\\s*\\d{1,2}(?!\\s*[.\\/-]?\\s*\\d)`;
+const RANGE_START = `(?<![\\p{L}\\d])(?:(?:с|c)\\s*(?=[«\\d])|(?:from|начиная\\s+с)\\s+)`;
 const RANGE_PATTERNS = [
   new RegExp(
-    `(?<![\\p{L}\\d])(?:с|c|from|начиная\\s+с)\\s+(?<a>${D_ANY})\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s+(?<b>${D_ANY})`,
+    `${RANGE_START}(?<a>${D_ANY}|${D_NO_YEAR})\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s+(?<b>${D_ANY})`,
     "giu"
   ),
   new RegExp(`(?<a>${DATE_NUM.source})\\s*-\\s*(?<b>${DATE_NUM.source})`, "giu"),
   // open-ended: «с 01.01.2027 — 165 000 тенге»
   new RegExp(
-    `(?<![\\p{L}\\d])(?:с|c|from|начиная\\s+с)\\s+(?<a>${D_ANY})(?!\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s)`,
+    `${RANGE_START}(?<a>${D_ANY})(?!\\s*(?:г\\.?|года)?\\s*(?:по|до|till|to|until|through)\\s)`,
     "giu"
   ),
 ];
+/** «01 августа» + end date 2026-10-31 → 2026-08-01 (previous year if that would be after the end). */
+const withYearOf = (partial: string, end: string | null) => {
+  if (!end) return null;
+  const year = Number(end.slice(0, 4));
+  const numeric = partial.match(/(\d{1,2})\s*[./]\s*(\d{1,2})/);
+  const make = (y: number) =>
+    numeric ? isoDate(numeric[1], numeric[2], String(y)) : parseDate(`${partial} ${y}`);
+  const date = make(year);
+  return date && date > end ? make(year - 1) : date;
+};
 const SCHEDULE_MONEY =
   /(\d{1,3}(?:[  ]\d{3})+|\d{4,7})(?:[.,](\d{2}))?\s*(?:\([^)]{0,120}\)\s*)?(?:тенге|тг\.?|₸|KZT)/iu;
+// «… – 417 600 тенге, из расчета 139 200 тенге в месяц»: the monthly rate, not the period total.
+const RATE_MONEY = new RegExp(
+  `(?:из\\s+расч[её]та|исходя\\s+из|at\\s+the\\s+rate\\s+of|based\\s+on)\\s*(?:ставки\\s*)?${SCHEDULE_MONEY.source}`,
+  "iu"
+);
 const moneyIn = (window: string) => {
+  const rate = window.match(RATE_MONEY);
+  if (rate) {
+    const amount =
+      Number(rate[1].replace(/[\s\u00a0]/g, "")) +
+      (rate[2] ? Number(rate[2]) / 100 : 0);
+    if (amount > 0)
+      return { amount, index: rate.index ?? 0, length: rate[0].length };
+  }
   const m = window.match(SCHEDULE_MONEY);
   if (!m) return null;
   const before = window.slice(0, m.index ?? 0);
@@ -490,8 +530,9 @@ export function findTariffSchedule(
       const start = m.index ?? 0;
       const end = start + m[0].length;
       if (hits.some(h => start < h.end && end > h.start)) continue; // already covered by a fuller pattern
-      const from = parseDate(m.groups?.a ?? "");
       const to = m.groups?.b ? parseDate(m.groups.b) : null;
+      const from =
+        parseDate(m.groups?.a ?? "") ?? withYearOf(m.groups?.a ?? "", to);
       if (!from || (m.groups?.b && !to) || (to && to < from)) continue;
       hits.push({ start, end, from, to });
     }
@@ -499,7 +540,7 @@ export function findTariffSchedule(
   const parts: Array<SchedulePart & { start: number }> = [];
   hits.forEach((hit, i) => {
     const next = hits[i + 1]?.start ?? flat.length;
-    const after = flat.slice(hit.end, Math.min(next, hit.end + 160));
+    const after = flat.slice(hit.end, Math.min(next, hit.end + 280));
     let money = moneyIn(after);
     let context = money ? after.slice(0, money.index + money.length + 40) : "";
     // «… по 31.12.2026 – 150 000 тенге» belongs to this period; «… по 31.12.2026, 130 000 тенге …» starts the next one.

@@ -82,14 +82,31 @@ describe("built-in recognition of a changing rate", () => {
       "Срок проживания с «1» сентября 2026 г. по «30» июня 2027 г. Стоимость в месяц: с 1 сентября 2026 г. по 31 декабря 2026 г. – 150 000 тенге, с 1 января 2027 г. по 30 июня 2027 г. – 160 000 тенге.",
       [150000, 160000],
     ],
+    [
+      // Real NU form (scan 305-2026): first date without a year, period totals + «из расчета … в месяц»
+      "Срок проживания: с «01» августа 2026 года по «30» июня 2027 года. Стоимость услуг проживания составляет: с01 августа по 31 октября 2026 года - 417 600 (четыреста семнадцать тысяч шестьсот) тенге с учетом:НДС, из расчета 139 200 (сто тридцать девять тысяч двести) тенге в месяц; “ с 01 ноября 2026 года по 30 июня 2027 года — 1 240 000 (один миллион двести сорок тысяч) тенге с учетом НДС, из расчета 155 000 (сто пятьдесят Пять тысяч) тенге в месяц. Общая стоимость услуг проживания за весь период составляет 1 657 600 тенге",
+      [139200, 155000],
+    ],
   ];
   it.each(cases)("%s", (text, amounts) => {
     const result = parseContractText(text);
     expect(result.tariffSchedule.map(p => p.amount)).toEqual(amounts);
-    expect(result.tariffSchedule[0]).toMatchObject({ from: "2026-09-01", to: "2026-12-31" });
-    expect(result.tariffSchedule[1]).toMatchObject({ from: "2027-01-01", to: "2027-06-30" });
+    if (amounts[0] === 139200) {
+      expect(result.tariffSchedule[0]).toMatchObject({ from: "2026-08-01", to: "2026-10-31" });
+      expect(result.tariffSchedule[1]).toMatchObject({ from: "2026-11-01", to: "2027-06-30" });
+    } else {
+      expect(result.tariffSchedule[0]).toMatchObject({ from: "2026-09-01", to: "2026-12-31" });
+      expect(result.tariffSchedule[1]).toMatchObject({ from: "2027-01-01", to: "2027-06-30" });
+    }
     expect(result.tariffAmount).toBe(amounts[0]);
     expect(result.warnings.join(" ")).toMatch(/Тариф меняется/);
+  });
+  it("a single rate «из расчета … в месяц» beats the total for the period", () => {
+    const result = parseContractText(
+      "Срок проживания: с 01.09.2026 по 30.06.2027. Стоимость услуг проживания составляет 1 500 000 тенге, из расчета 150 000 тенге в месяц."
+    );
+    expect(result.tariffAmount).toBe(150000);
+    expect(result.tariffSchedule).toEqual([]);
   });
   it("one rate for the whole term gives no schedule", () => {
     const result = parseContractText(
