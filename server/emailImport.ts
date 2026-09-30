@@ -106,7 +106,7 @@ const foldWord = (word: string) =>
     .replace(/kh/g, "h")
     .replace(/q/g, "k")
     .replace(/w/g, "v")
-    .replace(/x/g, "ks")
+    .replace(/x/g, "h") // Uzbek Latin: «Axmedova» = «Akhmedova»
     .replace(/j/g, "zh")
     .replace(/dzh/g, "zh")
     .replace(/(yu|iu)/g, "u")
@@ -263,54 +263,96 @@ export function planEmailUpdate(
   let keptExisting = 0;
   const touched = new Set<number>();
 
-  const find = (row: EmailSourceRow): { matches: ContractForEmail[]; matchedBy: MatchKind } | "ambiguous" => {
+  const sameBlock = (row: EmailSourceRow, contract: ContractForEmail) =>
+    !row.block || !contractBlockNumber(contract) || contractBlockNumber(contract) === row.block;
+  type Hit = { contract: ContractForEmail; kind: MatchKind; review?: string };
+  /**
+   * Every contract of the person in the row: the one with the number from the file AND the resident's
+   * other contracts found by name (the list often cites last year's contract while the app also has a
+   * new one — both should get the address).
+   */
+  const find = (row: EmailSourceRow): Hit[] | "ambiguous" => {
+    const hits = new Map<number, Hit>();
+    const put = (hit: Hit) => {
+      if (!hits.has(hit.contract.id)) hits.set(hit.contract.id, hit);
+    };
     const number = contractKey(row.contractNumber);
     if (number) {
-      const exact = byNumber.get(number) ?? [];
-      if (exact.length) return { matches: exact, matchedBy: "contractNumber" };
-      const short = shortKey(number);
-      const loose = short ? (byShortNumber.get(short) ?? []).filter(contract => !row.name || similarNames(row.name, contract.tenantName) || samePlace(row, contract)) : [];
-      if (loose.length) return { matches: loose, matchedBy: "contractNumber" };
+      for (const contract of byNumber.get(number) ?? []) put({ contract, kind: "contractNumber" });
+      if (!hits.size) {
+        const short = shortKey(number);
+        for (const contract of short ? byShortNumber.get(short) ?? [] : [])
+          if (!row.name || similarNames(row.name, contract.tenantName) || samePlace(row, contract))
+            put({ contract, kind: "contractNumber" });
+      }
     }
     if (row.name) {
-      let matches = byName.get(nameKey(row.name)) ?? [];
-      let matchedBy: MatchKind = "name";
-      if (!matches.length) {
-        // Latin ↔ Cyrillic, a missing patronymic, one typo.
-        matches = contracts.filter(contract => similarNames(row.name, contract.tenantName));
-        matchedBy = "similarName";
-      }
-      if (matches.length > 1 && (row.unit || row.block)) {
-        const narrowed = matches.filter(contract => samePlace(row, contract));
-        if (narrowed.length) {
-          matches = narrowed;
-          if (matchedBy === "name") matchedBy = "name+apartment";
-        }
-      }
-      // Namesakes in different apartments: do not guess.
-      if (matches.length > 1 && new Set(matches.map(apartmentOf)).size > 1) return "ambiguous";
-      if (matches.length) return { matches, matchedBy };
+      const exactKey = nameKey(row.name);
+      const byNameHits = contracts
+        .filter(contract => nameKey(contract.tenantName) === exactKey || similarNames(row.name, contract.tenantName))
+        .map(contract => ({ contract, exact: nameKey(contract.tenantName) === exactKey }));
+      const hasPlace = Boolean(row.block || row.unit);
+      const inPlace = hasPlace ? byNameHits.filter(item => samePlace(row, item.contract)) : [];
+      for (const item of inPlace)
+        put({ contract: item.contract, kind: item.exact ? (hasPlace ? "name+apartment" : "name") : "similarName" });
+      // Same person, but the apartment differs (or is missing) in the app or in the file.
+      const candidates = byNameHits.filter(
+        item => sameBlock(row, item.contract) && !hits.has(item.contract.id)
+      );
+      const ambiguousRest =
+        candidates.length > 1 && new Set(candidates.map(item => apartmentOf(item.contract))).size > 1;
+      if (ambiguousRest && !hits.size) return "ambiguous"; // namesakes in different apartments: do not guess
+      if (!ambiguousRest)
+        for (const item of candidates)
+          put({
+            contract: item.contract,
+            kind: item.exact ? "name" : "similarName",
+            // Only a real contradiction needs a look: the app has another apartment number.
+            review:
+              row.unit && digits(item.contract.unitName) && digits(item.contract.unitName) !== row.unit
+                ? `В файле «${row.name}», блок ${row.block ?? "—"}, кв. ${row.unit}; в договоре кв. ${digits(item.contract.unitName)} — проверьте`
+                : undefined,
+          });
     }
-    // The only active contract in that block + apartment.
-    if (row.block && row.unit) {
-      const inApartment = byApartment.get(`${row.block}|${row.unit}`) ?? [];
-      if (inApartment.length === 1) return { matches: inApartment, matchedBy: "apartment" };
-    }
-    return { matches: [], matchedBy: "name" };
+    return Array.from(hits.values());
+  };
+  /** Second pass: a row nobody matched ↔ the only untouched active contract in that block + apartment. */
+  const rowsPerApartment = new Map<string, number>();
+  for (const row of source)
+    if (row.block && row.unit)
+      rowsPerApartment.set(`${row.block}|${row.unit}`, (rowsPerApartment.get(`${row.block}|${row.unit}`) ?? 0) + 1);
+  const findByApartment = (row: EmailSourceRow, taken: Set<number>): Hit[] => {
+    if (!row.block || !row.unit) return [];
+    const key = `${row.block}|${row.unit}`;
+    // Shared apartments (several residents) are never matched by the apartment alone.
+    if ((rowsPerApartment.get(key) ?? 0) !== 1) return [];
+    const inApartment = (byApartment.get(key) ?? []).filter(contract => !taken.has(contract.id));
+    if (inApartment.length !== 1 || (byApartment.get(key) ?? []).length !== 1) return [];
+    return [
+      {
+        contract: inApartment[0],
+        kind: "apartment",
+        review: `Найден только по блоку и квартире: в файле «${row.name || "—"}»`,
+      },
+    ];
   };
 
-  for (const row of source) {
-    const found = find(row);
+  const firstPass = source.map(row => ({ row, found: find(row) }));
+  const takenFirst = new Set<number>();
+  for (const item of firstPass)
+    if (item.found !== "ambiguous") for (const hit of item.found) takenFirst.add(hit.contract.id);
+  for (const item of firstPass)
+    if (item.found !== "ambiguous" && !item.found.length) item.found = findByApartment(item.row, takenFirst);
+  for (const { row, found } of firstPass) {
     if (found === "ambiguous") {
       if (row.email) ambiguous.push({ ...row, candidates: 0 });
       continue;
     }
-    const { matches, matchedBy } = found;
-    if (!matches.length) {
+    if (!found.length) {
       if (row.email) unmatched.push(row);
       continue;
     }
-    for (const contract of matches) {
+    for (const { contract, kind: matchedBy, review } of found) {
       if (!row.email) {
         if (!contract.tenantEmail && !touched.has(contract.id))
           listedWithoutEmail.push({
@@ -347,12 +389,7 @@ export function planEmailUpdate(
         matchedBy,
         source: `${row.sheet}, строка ${row.row}`,
         sourceName: row.name,
-        review:
-          matchedBy === "apartment"
-            ? `Найден только по блоку и квартире: в файле «${row.name || "—"}»`
-            : matchedBy === "similarName" && (row.block || row.unit) && !samePlace(row, contract)
-              ? `Похожее ФИО «${row.name}», но другой блок/квартира`
-              : undefined,
+        review,
       });
     }
   }

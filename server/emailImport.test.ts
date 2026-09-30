@@ -44,7 +44,7 @@ describe("mass e-mail import from Excel", () => {
     expect(keep.keptExisting).toBe(1); // contract 2 already has another address
     expect(keep.unmatchedCount).toBe(1);
     const replace = planEmailUpdate(rows, contracts, { overwrite: true });
-    expect(replace.changes.find(c => c.contractId === 2)).toMatchObject({ oldEmail: "old@mail.ru", newEmail: "sabur@alumni.nu.edu.kz", matchedBy: "name" });
+    expect(replace.changes.find(c => c.contractId === 2)).toMatchObject({ oldEmail: "old@mail.ru", newEmail: "sabur@alumni.nu.edu.kz", matchedBy: "name+apartment" });
   });
 
   it("does not guess between namesakes in different apartments", () => {
@@ -99,5 +99,37 @@ describe("mass e-mail import from Excel", () => {
     expect(similarNames("Abdyrakhmankyzy Nargiza", "Абдырахманкызы Наргиза")).toBe(true);
     expect(similarNames("Aizhan Serikova", "Айгерим Серикова")).toBe(false);
     expect(similarNames("Mr. s Nancy L Stitt", "Nancy Lee Stitt")).toBe(true);
+  });
+
+  it("a resident listed with last year's contract also gets the address on the new one", () => {
+    const rows = extractEmailRows([
+      {
+        name: "s",
+        matrix: [
+          ["№", "Блок", "Квартира", "ФИО", "E-mail", "Statement"],
+          [1, 39, 603, "Zhassulan Toleubek", "zhassulan.toleubek@nu.edu.kz", "255-2026 от 05.01.2026"],
+          [2, 39, 210, "Gertrude Ellen Fynn", "gertrude.fynn@nu.edu.kz", "402-2026 from 01.08.2026"],
+          [3, 39, 210, "Gulnoza Akhmedova", "gulnoza@gmail.com", ""],
+          [4, 39, 306, "Mr. Hamad Hassan Awans", "hamad.awan@nu.edu.kz", "232-2026 от 05.01.2026"],
+        ],
+      },
+    ]);
+    const P = "г. Астана, пр. Кабанбай батыра 53, Блок 39";
+    const plan = planEmailUpdate(
+      rows,
+      [
+        { id: 1, contractNumber: "255-2026/08-23", tenantName: "Жасұлан Төлеубек", tenantEmail: "zhassulan.toleubek@nu.edu.kz", propertyName: P, unitName: "603", blockFolder: null, archivedAt: new Date() },
+        { id: 2, contractNumber: "415-2026", tenantName: "Төлеубек Жасұлан Маратұлы", tenantEmail: null, propertyName: P, unitName: "603", blockFolder: null },
+        { id: 3, contractNumber: "433-2026", tenantName: "Gulnoza Axmedova", tenantEmail: null, propertyName: P, unitName: "210", blockFolder: null },
+        { id: 4, contractNumber: "418-2026", tenantName: "Hamad Hassan Awan", tenantEmail: null, propertyName: P, unitName: "306", blockFolder: null },
+      ],
+      { overwrite: false }
+    );
+    expect(Object.fromEntries(plan.changes.map(c => [c.contractId, c.newEmail]))).toEqual({
+      2: "zhassulan.toleubek@nu.edu.kz",
+      3: "gulnoza@gmail.com", // not Gertrude from the same (shared) apartment
+      4: "hamad.awan@nu.edu.kz",
+    });
+    expect(plan.changes.every(c => !c.review)).toBe(true);
   });
 });
