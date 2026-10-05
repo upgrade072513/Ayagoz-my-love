@@ -1801,6 +1801,7 @@ export const appRouter = router({
       .input(
         z.object({
           dataUrl: dataUrlSchema(LIMITS.spreadsheetBytes),
+          fileName: fileNameSchema.optional(),
           // Only known columns, only sane indexes (no arbitrary keys → no prototype pollution).
           mapping: z
             .object(
@@ -1831,7 +1832,9 @@ export const appRouter = router({
         );
         await enforce(RULES.spreadsheetParse, rateKey("user", ctx.user.id));
         const upload = decodeSpreadsheetUpload(input.dataUrl);
-        return parseContractsExcel(upload.buffer, input.mapping as any);
+        return parseContractsExcel(upload.buffer, input.mapping as any, {
+          fileName: input.fileName,
+        });
       }),
     moveToFolder: protectedProcedure
       .input(
