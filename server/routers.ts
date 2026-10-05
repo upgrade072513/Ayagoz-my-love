@@ -1890,6 +1890,43 @@ export const appRouter = router({
         }
         return { plan, updated };
       }),
+    /** Undo «Дополнить номера»: every number still equal to what the action wrote goes back to the old one. */
+    undoNumberSuffix: protectedProcedure
+      .input(z.object({ dryRun: z.boolean().default(true) }))
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для изменения договоров"
+        );
+        const audits = await dbHelpers.listNumberSuffixAudits();
+        const seen = new Set<number>();
+        const plan: Array<{ id: number; tenantName: string; oldNumber: string; newNumber: string }> = [];
+        for (const audit of audits) {
+          if (seen.has(audit.contractId)) continue; // newest change per contract
+          seen.add(audit.contractId);
+          const match = String(audit.details ?? "").match(/^Номер договора: «(.+)» → «(.+)»$/);
+          if (!match) continue;
+          const contract = await getContract(audit.contractId);
+          if (!contract || (ctx.user.role !== "admin" && !canManageContract(ctx.user, contract))) continue;
+          // Changed by hand afterwards? Leave it.
+          if (contract.contractNumber?.trim() !== match[2]) continue;
+          plan.push({ id: contract.id, tenantName: contract.tenantName, oldNumber: match[2], newNumber: match[1] });
+        }
+        if (input.dryRun) return { plan, updated: 0 };
+        let updated = 0;
+        for (const item of plan) {
+          await updateContract(item.id, { contractNumber: item.newNumber });
+          await recordContractAudit({
+            contractId: item.id,
+            actorUserId: ctx.user.id,
+            action: "updated",
+            details: `Отмена дополнения номера: «${item.oldNumber}» → «${item.newNumber}»`,
+          });
+          updated++;
+        }
+        return { plan, updated };
+      }),
     /** Writes the building («Блок 38/39/44/45») into the address of selected contracts; the folder stays. */
     setBuilding: protectedProcedure
       .input(

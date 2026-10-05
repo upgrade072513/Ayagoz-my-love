@@ -690,6 +690,16 @@ export async function createContractAudit(
     .limit(1);
   return rows[0];
 }
+/** Audit entries written by «Дополнить номера» (newest first) — used to undo it. */
+export async function listNumberSuffixAudits() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(contractAuditLog)
+    .where(sql`${contractAuditLog.details} LIKE ${"Номер договора: «%"}`)
+    .orderBy(desc(contractAuditLog.id));
+}
 export async function listContractAudit(contractId: number) {
   const db = await getDb();
   if (!db) return [];

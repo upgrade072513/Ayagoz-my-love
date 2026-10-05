@@ -12,12 +12,37 @@ export function NumberSuffixButton() {
   const [open, setOpen] = useState(false);
   const [suffix, setSuffix] = useState("/08-23");
   const [plan, setPlan] = useState<PlanItem[] | null>(null);
+  const [mode, setMode] = useState<"add" | "undo">("add");
   const utils = trpc.useUtils();
   const run = trpc.contracts.appendNumberSuffix.useMutation({
     onError: error => toast.error(error.message),
   });
-  const preview = (value = suffix) =>
+  const undo = trpc.contracts.undoNumberSuffix.useMutation({
+    onError: error => toast.error(error.message),
+  });
+  const previewUndo = () => {
+    setMode("undo");
+    setPlan(null);
+    undo.mutate({ dryRun: true }, { onSuccess: result => setPlan(result.plan as PlanItem[]) });
+  };
+  const applyUndo = () =>
+    undo.mutate(
+      { dryRun: false },
+      {
+        onSuccess: result => {
+          toast.success(`Номера возвращены: ${result.updated}`);
+          utils.contracts.list.invalidate();
+          utils.accruals.invalidate();
+          setOpen(false);
+          setPlan(null);
+          setMode("add");
+        },
+      }
+    );
+  const preview = (value = suffix) => {
+    setMode("add");
     run.mutate({ suffix: value, dryRun: true }, { onSuccess: result => setPlan(result.plan as PlanItem[]) });
+  };
   const apply = () =>
     run.mutate(
       { suffix, dryRun: false },
@@ -57,12 +82,13 @@ export function NumberSuffixButton() {
               </label>
               <Button size="sm" variant="outline" onClick={() => preview()} disabled={run.isPending || !suffix.trim()}>Показать, что изменится</Button>
               <span className="text-xs text-slate-500">Пример: 374-2026 → 374-2026{suffix}</span>
+              <Button size="sm" variant={mode === "undo" ? "default" : "ghost"} className="ml-auto text-rose-700" onClick={previewUndo} disabled={undo.isPending}>Отменить прошлое дополнение</Button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
               {plan === null ? (
                 <p className="px-5 py-8 text-center text-sm text-slate-500">Считаем…</p>
               ) : plan.length === 0 ? (
-                <p className="px-5 py-8 text-center text-sm text-slate-500">Номеров без окончания не найдено.</p>
+                <p className="px-5 py-8 text-center text-sm text-slate-500">{mode === "undo" ? "Нечего отменять: дополненных номеров нет (или их уже изменили вручную)." : "Номеров без окончания не найдено."}</p>
               ) : (
                 <table className="w-full text-left text-sm">
                   <thead className="sticky top-0 bg-white text-xs uppercase tracking-wide text-slate-500 shadow-[0_1px_0_#e2e8f0]">
@@ -85,9 +111,15 @@ export function NumberSuffixButton() {
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
               <Button variant="ghost" onClick={() => { setOpen(false); setPlan(null); }}>Отмена</Button>
-              <Button disabled={!ready.length || run.isPending} onClick={() => { if (window.confirm(`Изменить номера у ${ready.length} договоров?`)) apply(); }}>
-                {run.isPending ? "Сохраняем…" : `Дополнить номера (${ready.length})`}
-              </Button>
+              {mode === "undo" ? (
+                <Button className="bg-rose-700 hover:bg-rose-800" disabled={!plan?.length || undo.isPending} onClick={() => { if (window.confirm(`Вернуть прежние номера у ${plan?.length ?? 0} договоров?`)) applyUndo(); }}>
+                  {undo.isPending ? "Возвращаем…" : `Вернуть прежние номера (${plan?.length ?? 0})`}
+                </Button>
+              ) : (
+                <Button disabled={!ready.length || run.isPending} onClick={() => { if (window.confirm(`Изменить номера у ${ready.length} договоров?`)) apply(); }}>
+                  {run.isPending ? "Сохраняем…" : `Дополнить номера (${ready.length})`}
+                </Button>
+              )}
             </div>
           </div>
         </div>
