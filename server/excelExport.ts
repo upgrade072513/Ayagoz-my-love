@@ -122,6 +122,14 @@ function styleReportSheet(
   };
   sheet["!rows"] = [{ hpt: 26 }, { hpt: 8 }, { hpt: 32 }];
 }
+const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+/** «2026-08» → «Август 2026». */
+export const monthLabel = (period: unknown) => {
+  const match = String(period ?? "").match(/^(\d{4})-(\d{2})/);
+  return match && Number(match[2]) >= 1 && Number(match[2]) <= 12
+    ? `${MONTH_NAMES[Number(match[2]) - 1]} ${match[1]}`
+    : String(period ?? "");
+};
 function safeSheetName(name: string, used: Set<string>) {
   const base =
     name
@@ -355,7 +363,7 @@ export async function buildAccrualWorkbook(
         (contract?.tariffType ?? row.tariffType) === "daily"
           ? "Суточный"
           : "Месячный",
-        row.period,
+        monthLabel(row.period),
         serviceFrom,
         serviceTo,
         daysInPeriod(serviceFrom, serviceTo),
@@ -424,7 +432,7 @@ export async function buildAccrualWorkbook(
     ]
   );
   const blockSummarySheet = XLSX.utils.aoa_to_sheet([
-    [`Сводка по блокам — ${period}`],
+    [`Сводка по блокам — ${monthLabel(period)}`],
     [],
     ["Блок", "Количество начислений", "Начислено (с НДС)", "Сумма без НДС"],
     ...blockTotals,
@@ -490,7 +498,7 @@ export async function buildAccrualWorkbook(
   XLSX.utils.book_append_sheet(
     workbook,
     makeAccrualSheet(
-      `Услуги проживания (физ лица) - ${period}`,
+      `Услуги проживания (физ лица) - ${monthLabel(period)}`,
       ACCRUAL_EXPORT_HEADERS,
       summaryRows
     ),
@@ -506,13 +514,13 @@ export async function buildAccrualWorkbook(
   for (const [folder, rows] of Array.from(grouped.entries())) {
     XLSX.utils.book_append_sheet(
       workbook,
-      makeAccrualSheet(`${folder} — ${period}`, ACCRUAL_EXPORT_HEADERS, rows),
+      makeAccrualSheet(`${folder} — ${monthLabel(period)}`, ACCRUAL_EXPORT_HEADERS, rows),
       safeSheetName(folder, usedNames)
     );
   }
 
   const errorSheet = XLSX.utils.aoa_to_sheet([
-    [`Ошибки и предупреждения — ${period}`],
+    [`Ошибки и предупреждения — ${monthLabel(period)}`],
     [],
     ["ID начисления", "Номер договора", "Плательщик", "Проблема"],
     ...errors,

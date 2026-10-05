@@ -202,7 +202,7 @@ describe("invoices.exportExcel", () => {
     expect(result.fileName).toBe("Услуги проживания (физ лица)-2026-07.xlsx");
     expect(result.count).toBe(3);
     expect(result.vatRate).toBe(0.16);
-    expect(matrix[0]?.[0]).toBe("Услуги проживания (физ лица) - 2026-07");
+    expect(matrix[0]?.[0]).toBe("Услуги проживания (физ лица) - Июль 2026");
     expect(matrix[2]).toEqual([
       "№",
       "Номер договора",
@@ -233,7 +233,7 @@ describe("invoices.exportExcel", () => {
       "101",
       0,
       "Месячный",
-      "2026-07",
+      "Июль 2026",
       serial("2026-07-01"),
       serial("2026-07-31"),
       31,
