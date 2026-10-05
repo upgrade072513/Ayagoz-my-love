@@ -19,15 +19,17 @@ describe("Excel report: Family Students and PhD", () => {
       contract(2, "Family 44", "Family student", `${P}, Блок 44`, "1004"),
       contract(3, "Family 45", "Family Students", `${P}, Блок 45`, "311"),
       contract(4, "PhD 38", "PHD Student", `${P}, Блок 38`, "205"),
+      contract(5, "Kholida Khaldarova", "Family Student - Блок А3", P, "205"), // no block in the address
     ];
     const result = await buildAccrualWorkbook("2026-08", contracts.map((c, i) => accrual(i + 1, c.id)), contracts);
     const book = XLSX.read(result.buffer, { type: "buffer" });
     expect(book.SheetNames.filter(name => /family/i.test(name))).toEqual(["Family Students"]);
     const family = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets["Family Students"], { header: 1, raw: true });
-    expect(family.slice(3, 6).map(row => [row[4], row[5]])).toEqual([
+    expect(family.slice(3, 7).map(row => [row[4], row[5]])).toEqual([
       ["Ariza Azam", "Блок А1"],
       ["Family 44", "Блок А2"],
       ["Family 45", "Блок А4"],
+      ["Kholida Khaldarova", "Блок А3"], // taken from the folder name
     ]);
     const phd = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets["PHD Student"], { header: 1, raw: true });
     expect(phd[3]?.[5]).toBe("Блок А1");

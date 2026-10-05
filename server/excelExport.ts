@@ -1,7 +1,7 @@
 import XLSX from "xlsx-js-style";
 import ExcelJS from "exceljs";
 import { USM_LOGO_BASE64 } from "./logoData";
-import { DEFAULT_BLOCK_FOLDER, deriveBlockFolder } from "@shared/contractFolder";
+import { DEFAULT_BLOCK_FOLDER, buildingOf, deriveBlockFolder } from "@shared/contractFolder";
 import { toDateOnly } from "@shared/dateOnly";
 
 const VAT_RATE = 0.16;
@@ -331,10 +331,10 @@ export async function buildAccrualWorkbook(
       : /ph\.?\s*d/i.test(ownFolder)
         ? "PHD Student"
         : null;
-    const building = deriveBlockFolder(
+    const building = buildingOf(
       contract?.propertyName ?? row.propertyName,
       contract?.unitName ?? row.unitName,
-      null
+      ownFolder
     );
     const folder = category ?? ownFolder;
     const blockLabel =
@@ -390,7 +390,7 @@ export async function buildAccrualWorkbook(
       messages.push("Сумма должна быть больше нуля");
     {
       const own = deriveBlockFolder(contract?.propertyName ?? row.propertyName, contract?.unitName ?? row.unitName, contract?.blockFolder);
-      const building = deriveBlockFolder(contract?.propertyName ?? row.propertyName, contract?.unitName ?? row.unitName, null);
+      const building = buildingOf(contract?.propertyName ?? row.propertyName, contract?.unitName ?? row.unitName, own);
       if (/family|ph\.?\s*d/i.test(own) && building === DEFAULT_BLOCK_FOLDER)
         messages.push("В адресе не указан блок проживания (38/39/44/45) — в столбце «Блок» стоит «—». Укажите блок в договоре («Указать блок» в реестре)");
     }

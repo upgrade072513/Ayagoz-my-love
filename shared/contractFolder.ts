@@ -40,3 +40,24 @@ export function deriveBlockFolder(
   }
   return DEFAULT_BLOCK_FOLDER;
 }
+
+/**
+ * The building a resident lives in (Блок А1 = 38, А2 = 44, А3 = 39, А4 = 45), for category folders such
+ * as «Family Student - Блок А3»: first from the folder name, then from the address. DEFAULT_BLOCK_FOLDER
+ * when neither says.
+ */
+export function buildingOf(
+  propertyName?: unknown,
+  unitName?: unknown,
+  folder?: unknown
+): string {
+  const folderText = String(folder ?? "");
+  const lettered = folderText.match(/блок\s*[АA]\s*([1-9])/iu);
+  if (lettered) return `Блок А${lettered[1]}`;
+  if (/\d{2}/.test(folderText)) {
+    const fromFolder = deriveBlockFolder(folderText, null, null);
+    if (/^Блок А\d$/.test(fromFolder)) return fromFolder;
+  }
+  const fromAddress = deriveBlockFolder(propertyName, unitName, null);
+  return /^Блок А\d$/.test(fromAddress) ? fromAddress : DEFAULT_BLOCK_FOLDER;
+}
