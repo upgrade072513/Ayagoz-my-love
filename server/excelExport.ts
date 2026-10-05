@@ -388,6 +388,12 @@ export async function buildAccrualWorkbook(
       messages.push("Некорректный период услуги");
     if (!(Number(row.amount) > 0))
       messages.push("Сумма должна быть больше нуля");
+    {
+      const own = deriveBlockFolder(contract?.propertyName ?? row.propertyName, contract?.unitName ?? row.unitName, contract?.blockFolder);
+      const building = deriveBlockFolder(contract?.propertyName ?? row.propertyName, contract?.unitName ?? row.unitName, null);
+      if (/family|ph\.?\s*d/i.test(own) && building === DEFAULT_BLOCK_FOLDER)
+        messages.push("В адресе не указан блок проживания (38/39/44/45) — в столбце «Блок» стоит «—». Укажите блок в договоре («Указать блок» в реестре)");
+    }
     return messages.map(message => [
       row.id,
       contract?.contractNumber ?? "—",

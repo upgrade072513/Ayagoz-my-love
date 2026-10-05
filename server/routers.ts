@@ -1837,6 +1837,43 @@ export const appRouter = router({
           fileName: input.fileName,
         });
       }),
+    /** Writes the building («Блок 38/39/44/45») into the address of selected contracts; the folder stays. */
+    setBuilding: protectedProcedure
+      .input(
+        z.object({
+          ids: z.array(idSchema).min(1).max(LIMITS.bulkIds),
+          block: z.string().trim().regex(/^[0-9]{1,3}[A-Za-zА-Яа-я]?$/, "Укажите номер блока, например 38"),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        assertPermission(
+          ctx.user.role,
+          "manageContracts",
+          "Недостаточно прав для изменения договоров"
+        );
+        let updated = 0;
+        for (const id of input.ids) {
+          const contract = await requireContractById(ctx.user, id);
+          const property = String(contract.propertyName ?? "").trim();
+          const nextProperty = /Блок\s*№?\s*[0-9A-Za-zА-Яа-я]+/iu.test(property)
+            ? property.replace(/Блок\s*№?\s*[0-9A-Za-zА-Яа-я]+/iu, `Блок ${input.block}`)
+            : property
+              ? `${property}, Блок ${input.block}`
+              : `г. Астана, пр. Кабанбай батыра 53, Блок ${input.block}`;
+          if (nextProperty === property) continue;
+          // The folder (Family Students, PHD Student …) does not change with the address.
+          const folder = deriveBlockFolder(contract.propertyName, contract.unitName, contract.blockFolder);
+          await updateContract(id, { propertyName: nextProperty, blockFolder: folder });
+          await recordContractAudit({
+            contractId: id,
+            actorUserId: ctx.user.id,
+            action: "updated",
+            details: `Блок проживания: «${property || "—"}» → «${nextProperty}»`,
+          });
+          updated++;
+        }
+        return { updated };
+      }),
     moveToFolder: protectedProcedure
       .input(
         z.object({
