@@ -145,6 +145,17 @@ function makeAccrualSheet(title: string, headers: string[], rows: unknown[][]) {
   const totalNet = roundCurrency(
     rows.reduce((sum, row) => sum + Number(row[14] ?? 0), 0)
   );
+  // ISO date strings → real Excel dates (shown as dd.mm.yyyy, sortable and filterable as dates).
+  const DATE_COLS = [2, 3, 10, 11];
+  rows = rows.map(row =>
+    row.map((value, index) => {
+      const match = DATE_COLS.includes(index) && typeof value === "string" ? value.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
+      // Excel serial day number (no time zone drift); the dd.mm.yyyy format is applied below.
+      return match
+        ? (Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) - Date.UTC(1899, 11, 30)) / 86400000
+        : value;
+    })
+  );
   const sheet = XLSX.utils.aoa_to_sheet([
     [title],
     [],
@@ -221,6 +232,53 @@ export function autoFitColumns(sheet: XLSX.WorkSheet, headerRow = 2) {
   sheet["!rows"] = rows;
 }
 
+/** Same autofit, applied to the final ExcelJS workbook (what Excel actually opens). */
+function fitColumnsExcelJs(sheet: ExcelJS.Worksheet, headerRow = 3) {
+  const mergedRanges: string[] = ((sheet as any).model?.merges ?? []) as string[];
+  const merged = new Set<string>();
+  for (const range of mergedRanges) {
+    const [from, to] = range.split(":");
+    if (!to) continue;
+    const start = sheet.getCell(from);
+    const end = sheet.getCell(to);
+    if (Number(end.col) <= Number(start.col)) continue;
+    for (let r = Number(start.row); r <= Number(end.row); r++)
+      for (let c = Number(start.col); c <= Number(end.col); c++) merged.add(`${r}:${c}`);
+  }
+  const widths = new Map<number, number>();
+  let headerLines = 1;
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber < headerRow) return;
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (merged.has(`${rowNumber}:${colNumber}`)) return;
+      const value = cell.value as unknown;
+      if (value == null || value === "") return;
+      let length: number;
+      if (typeof value === "number") {
+        const shown = value.toLocaleString("ru-RU", {
+          minimumFractionDigits: cell.numFmt?.includes("0.00") ? 2 : 0,
+          maximumFractionDigits: 2,
+        });
+        length = shown.length + (cell.numFmt?.includes("₸") ? 5 : 1);
+      } else if (value instanceof Date) length = 10;
+      else if (rowNumber === headerRow)
+        length = Math.max(...String((value as any)?.richText ? (value as any).richText.map((p: any) => p.text).join("") : value).split(/\s+/).map(word => word.length)) + 3; // + filter arrow
+      else length = Math.max(...String((value as any)?.text ?? (value as any)?.result ?? value).split("\n").map(line => line.length));
+      widths.set(colNumber, Math.max(widths.get(colNumber) ?? 6, Math.min(length + 2, 60)));
+    });
+  });
+  widths.forEach((width, col) => {
+    sheet.getColumn(col).width = width;
+  });
+  // Header row tall enough for wrapped headers.
+  const header = sheet.getRow(headerRow);
+  header.eachCell({ includeEmpty: false }, (cell, col) => {
+    const width = widths.get(col) ?? 10;
+    headerLines = Math.max(headerLines, Math.ceil(String(cell.value ?? "").length / Math.max(1, width - 3)));
+  });
+  header.height = Math.max(header.height ?? 0, 15 * Math.min(headerLines, 5) + 6);
+}
+
 async function addLogoToWorkbook(buffer: Buffer, sheetNames: string[]) {
   const report = new ExcelJS.Workbook();
   await report.xlsx.load(buffer as any);
@@ -231,6 +289,9 @@ async function addLogoToWorkbook(buffer: Buffer, sheetNames: string[]) {
   for (const name of sheetNames) {
     const sheet = report.getWorksheet(name);
     if (!sheet) continue;
+    // Required by Excel: without defaultRowHeight the file opens as «[восстановлено]» and loses column widths.
+    sheet.properties.defaultRowHeight = 15;
+    fitColumnsExcelJs(sheet);
     sheet.getRow(1).height = 70;
     sheet.addImage(imageId, {
       tl: { col: Math.max(0, sheet.columnCount - 3), row: 0 },

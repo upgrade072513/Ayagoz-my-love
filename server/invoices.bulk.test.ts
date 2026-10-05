@@ -220,10 +220,13 @@ describe("invoices.exportExcel", () => {
       "Сумма отчета за период (с учетом НДС) в тенге",
       "Сумма отчета за период (без НДС) в тенге",
     ]);
+    // Dates are real Excel dates (serial day numbers shown as dd.mm.yyyy).
+    const serial = (iso: string) =>
+      (Date.parse(`${iso}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86400000;
     expect(matrix[3]).toEqual([
       1,
       "Д-2026-001",
-      "2026-07-15",
+      serial("2026-07-15"),
       undefined,
       "Плательщик 1",
       "Блок А1",
@@ -231,8 +234,8 @@ describe("invoices.exportExcel", () => {
       0,
       "Месячный",
       "2026-07",
-      "2026-07-01",
-      "2026-07-31",
+      serial("2026-07-01"),
+      serial("2026-07-31"),
       31,
       37584,
       32400,
