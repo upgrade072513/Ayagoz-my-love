@@ -1,7 +1,7 @@
 import XLSX from "xlsx-js-style";
 import ExcelJS from "exceljs";
 import { USM_LOGO_BASE64 } from "./logoData";
-import { deriveBlockFolder } from "@shared/contractFolder";
+import { DEFAULT_BLOCK_FOLDER, deriveBlockFolder } from "@shared/contractFolder";
 import { toDateOnly } from "@shared/dateOnly";
 
 const VAT_RATE = 0.16;
@@ -319,11 +319,26 @@ export async function buildAccrualWorkbook(
     const serviceFrom = dateOnly(row.serviceFrom);
     const serviceTo = dateOnly(row.serviceTo);
     const gross = roundCurrency(Number(row.amount));
-    const folder = deriveBlockFolder(
-      contract?.propertyName,
-      contract?.unitName,
+    const ownFolder = deriveBlockFolder(
+      contract?.propertyName ?? row.propertyName,
+      contract?.unitName ?? row.unitName,
       contract?.blockFolder
     );
+    // Category folders (Family Students, PhD) are one sheet each, whatever the folder spelling;
+    // their «Блок» column shows the building the resident actually lives in (А1 = 38, А2 = 44 …).
+    const category = /family/i.test(ownFolder)
+      ? "Family Students"
+      : /ph\.?\s*d/i.test(ownFolder)
+        ? "PHD Student"
+        : null;
+    const building = deriveBlockFolder(
+      contract?.propertyName ?? row.propertyName,
+      contract?.unitName ?? row.unitName,
+      null
+    );
+    const folder = category ?? ownFolder;
+    const blockLabel =
+      category && building !== DEFAULT_BLOCK_FOLDER ? building : category ? "—" : ownFolder;
     return {
       row,
       contract,
@@ -334,7 +349,7 @@ export async function buildAccrualWorkbook(
         contract?.contractDate ? dateOnly(contract.contractDate) : "",
         contract?.terminationDate ? dateOnly(contract.terminationDate) : "",
         contract?.tenantName ?? row.tenantName ?? "Без договора",
-        folder,
+        blockLabel,
         contract?.unitName ?? row.unitName ?? "",
         Number(contract?.tariffAmount ?? row.tariffAmount ?? 0),
         (contract?.tariffType ?? row.tariffType) === "daily"
@@ -419,6 +434,39 @@ export async function buildAccrualWorkbook(
       ),
     ],
   ]);
+  // Family Students / PHD Student by building (А1 = 38, А2 = 44 …), below the main summary.
+  const categoryBreakdown: unknown[][] = [];
+  for (const category of ["Family Students", "PHD Student"]) {
+    const items = exportRows.filter(item => item.folder === category);
+    if (!items.length) continue;
+    const byBuilding = new Map<string, ExportRow[]>();
+    for (const item of items) {
+      const building = String(item.values[5] ?? "—");
+      byBuilding.set(building, [...(byBuilding.get(building) ?? []), item]);
+    }
+    for (const [building, rows] of Array.from(byBuilding.entries()).sort((a, b) => a[0].localeCompare(b[0], "ru")))
+      categoryBreakdown.push([
+        `${category} — ${building}`,
+        rows.length,
+        roundCurrency(rows.reduce((sum, item) => sum + Number(item.values[13] ?? 0), 0)),
+        roundCurrency(rows.reduce((sum, item) => sum + Number(item.values[14] ?? 0), 0)),
+      ]);
+  }
+  if (categoryBreakdown.length) {
+    const start = 2 + 1 + blockTotals.length + 2 + 2; // header row, rows, blank, ИТОГО, blank
+    XLSX.utils.sheet_add_aoa(
+      blockSummarySheet,
+      [["В т.ч. Family Students и PHD Student по блокам проживания", "", "", ""], ...categoryBreakdown],
+      { origin: { r: start, c: 0 } }
+    );
+    styleCell(blockSummarySheet, start, 0, { font: { bold: true, color: { rgb: REPORT_COLORS.navy } } });
+    for (let r = start + 1; r <= start + categoryBreakdown.length; r++)
+      for (let c = 0; c < 4; c++) {
+        styleCell(blockSummarySheet, r, c, bodyBorderStyle);
+        const cell = blockSummarySheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && c >= 2) cell.z = currencyFormat;
+      }
+  }
   blockSummarySheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }];
   blockSummarySheet["!cols"] = [
     { wch: 28 },
