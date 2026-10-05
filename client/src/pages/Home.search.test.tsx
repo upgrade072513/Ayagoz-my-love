@@ -35,6 +35,7 @@ vi.mock("@/lib/trpc", () => {
       previewEmailImport: { useMutation },
       applyEmailImport: { useMutation },
       setBuilding: { useMutation },
+      appendNumberSuffix: { useMutation },
       createFromScan: { useMutation: () => ({ mutate: mocks.createFromScanMutate, mutateAsync: mocks.createFromScanMutateAsync, isPending: false }) },
       previewImport: { useMutation },
       importRows: { useMutation },
