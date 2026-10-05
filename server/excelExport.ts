@@ -160,7 +160,8 @@ function makeAccrualSheet(title: string, headers: string[], rows: unknown[][]) {
   ]);
   sheet["!merges"] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
-    { s: { r: 3 + rows.length, c: 0 }, e: { r: 3 + rows.length, c: 12 } },
+    // «ИТОГО за расчетный период» row: title, headers, rows, an empty row, then the totals.
+    { s: { r: 4 + rows.length, c: 0 }, e: { r: 4 + rows.length, c: 12 } },
   ];
   sheet["!cols"] = headers.map((_, index) => ({
     wch:
@@ -175,6 +176,49 @@ function makeAccrualSheet(title: string, headers: string[], rows: unknown[][]) {
   styleReportSheet(sheet, headers, rows.length, [7, 13, 14], [2, 3, 10, 11]);
   sheet["!freeze"] = { xSplit: 0, ySplit: 3 };
   return sheet;
+}
+
+/**
+ * Column widths from the content (like Excel's «Автоподбор ширины»): the longest value in each column
+ * below the title, numbers measured as they are displayed («1 234 567,89»), headers by their longest word
+ * (headers wrap). Clamped so one long note does not make a column screen-wide.
+ */
+export function autoFitColumns(sheet: XLSX.WorkSheet, headerRow = 2) {
+  const ref = sheet["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  // Text in merged cells (title, «ИТОГО…») spans several columns and must not widen the first one.
+  const merged = (r: number, c: number) =>
+    (sheet["!merges"] ?? []).some(
+      m => m.e.c > m.s.c && r >= m.s.r && r <= m.e.r && c >= m.s.c && c <= m.e.c
+    );
+  const widths: number[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    let width = 6;
+    for (let r = Math.max(range.s.r, headerRow); r <= range.e.r; r++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (!cell || cell.v == null || cell.v === "" || merged(r, c)) continue;
+      let length: number;
+      if (typeof cell.v === "number")
+        length = cell.v.toLocaleString("ru-RU", { minimumFractionDigits: Number.isInteger(cell.v) ? 0 : 2, maximumFractionDigits: 2 }).length + 1;
+      else if (cell.v instanceof Date) length = 10;
+      else if (r === headerRow)
+        length = Math.max(...String(cell.v).split(/\s+/).map(word => word.length)) + 2;
+      else length = Math.max(...String(cell.v).split("\n").map(line => line.length));
+      width = Math.max(width, length + 2);
+    }
+    widths.push(Math.min(width, 60));
+  }
+  sheet["!cols"] = widths.map(wch => ({ wch }));
+  // Header cells wrap: give the header row enough height for its longest header.
+  let lines = 1;
+  widths.forEach((wch, index) => {
+    const cell = sheet[XLSX.utils.encode_cell({ r: headerRow, c: range.s.c + index })];
+    if (cell?.v != null) lines = Math.max(lines, Math.ceil(String(cell.v).length / Math.max(1, wch - 2)));
+  });
+  const rows = (sheet["!rows"] ?? []) as XLSX.RowInfo[];
+  rows[headerRow] = { ...(rows[headerRow] ?? {}), hpt: Math.max(rows[headerRow]?.hpt ?? 0, 15 * Math.min(lines, 4) + 6) };
+  sheet["!rows"] = rows;
 }
 
 async function addLogoToWorkbook(buffer: Buffer, sheetNames: string[]) {
@@ -370,6 +414,7 @@ export async function buildAccrualWorkbook(
     safeSheetName("Ошибки", usedNames)
   );
 
+  for (const name of workbook.SheetNames) autoFitColumns(workbook.Sheets[name]);
   return {
     buffer: await addLogoToWorkbook(
       XLSX.write(workbook, { type: "buffer", bookType: "xlsx" } as any),

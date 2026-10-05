@@ -87,6 +87,7 @@ import { createHash, randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   type Actor,
+  accrualBlock,
   canAccessContract,
   canAccessBlock,
   filterAccruals,
@@ -2061,6 +2062,30 @@ export const appRouter = router({
       }),
   }),
   accruals: router({
+    /** Totals by month × block × status (all periods the user may see) for the summary panel. */
+    summary: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await scopeAccrualRows(ctx.user, await listAccruals());
+      const contractsById = new Map(
+        (await listContracts(true)).map(contract => [contract.id, contract])
+      );
+      const groups = new Map<
+        string,
+        { period: string; block: string; status: string; count: number; amount: number }
+      >();
+      for (const row of rows) {
+        const block =
+          accrualBlock(row, row.contractId == null ? null : contractsById.get(row.contractId)) ??
+          "Без папки";
+        const key = `${row.period}|${block}|${row.status}`;
+        const group = groups.get(key) ?? { period: row.period, block, status: row.status, count: 0, amount: 0 };
+        group.count += 1;
+        group.amount = Math.round((group.amount + Number(row.amount || 0)) * 100) / 100;
+        groups.set(key, group);
+      }
+      return Array.from(groups.values()).sort((a, b) =>
+        a.period === b.period ? a.block.localeCompare(b.block, "ru") : a.period.localeCompare(b.period)
+      );
+    }),
     list: protectedProcedure
       .input(z.object({ period: periodSchema }))
       .query(async ({ input, ctx }) =>

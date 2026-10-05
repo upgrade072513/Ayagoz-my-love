@@ -54,6 +54,7 @@ vi.mock("@/lib/trpc", () => {
     },
     accruals: {
       list: { useQuery: () => ({ data: mocks.accruals }) },
+      summary: { useQuery: () => ({ data: [], isLoading: false }) },
       generate: { useMutation: () => ({ mutate: mocks.generateMutate, mutateAsync: mocks.generateMutateAsync, isPending: false }) },
       updateAmount: { useMutation },
       updateEmail: { useMutation },
