@@ -4,6 +4,8 @@
 // (Latin ↔ Cyrillic spelling, titles and word order do not matter), then by block + apartment.
 // The preview also explains every contract without an address that could not be filled.
 import { deriveBlockFolder } from "@shared/contractFolder";
+import { contractKey, nameKey, shortKey, similarNames } from "@shared/nameMatch";
+export { contractKey, nameKey, similarNames } from "@shared/nameMatch";
 
 export type EmailSourceRow = {
   sheet: string;
@@ -52,103 +54,6 @@ export type EmailChange = {
 const EMAIL = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 const text = (value: unknown) =>
   value instanceof Date ? "" : String(value ?? "").replace(/\s+/g, " ").trim();
-
-/**
- * Contract number → comparable key: digit groups without leading zeros.
- * «0224-2026-08-23 от 04.06.2026», «0224-2026/08-23», «№ 224-2026/8-23», «0112- 2026/08-23»,
- * «Nazarbayev Fund 022-2026/08-23 от 16.01.2026» → «224-2026-8-23» / «112-2026-8-23» / «22-2026-8-23».
- */
-export const contractKey = (value: string | null | undefined) => {
-  const head = String(value ?? "")
-    .split("|")[0]
-    .split(/\s+(?:от|from|dated)\s+/i)[0];
-  const match = head.match(/\d{1,6}\s*[-–]\s*\d{4}(?:\s*[-/–]\s*\d{1,2}\s*[-–]\s*\d{1,2})?/);
-  if (match)
-    return match[0]
-      .split(/\D+/)
-      .filter(Boolean)
-      .map(group => String(Number(group)))
-      .join("-");
-  const plain = head.toLowerCase().replace(/[^0-9a-zа-яё]/giu, "");
-  return /\d/.test(plain) && plain.length >= 3 ? plain : null;
-};
-/** Only the number part (no «/08-23» suffix): «305-2026» matches «0305-2026/08-23». */
-const shortKey = (key: string | null) =>
-  key && /^\d+-\d{4}(-|$)/.test(key) ? key.split("-").slice(0, 2).join("-") : null;
-
-const TITLES = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "phd", "г", "н", "жа", "господин", "госпожа"]);
-/** Case, «ё», punctuation, titles («Mr.», «Dr.») and word order do not matter. */
-export const nameKey = (value: string | null | undefined) =>
-  nameWords(value).sort().join(" ");
-const nameWords = (value: string | null | undefined) =>
-  String(value ?? "")
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .replace(/\([^)]*\)/g, " ")
-    .replace(/[^\p{L}\s]/gu, " ")
-    .split(/\s+/)
-    .filter(word => word && !TITLES.has(word));
-
-// Cyrillic (Russian + Kazakh) → Latin, then spelling variants folded together, so that
-// «Нұрайым Қосыбақ» and «Nuraiym Kossybak» give the same key.
-const TRANSLIT: Record<string, string> = {
-  а: "a", ә: "a", б: "b", в: "v", г: "g", ғ: "g", д: "d", е: "e", ж: "zh", з: "z", и: "i", й: "i",
-  к: "k", қ: "k", л: "l", м: "m", н: "n", ң: "n", о: "o", ө: "o", п: "p", р: "r", с: "s", т: "t",
-  у: "u", ұ: "u", ү: "u", ф: "f", х: "h", һ: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sh", ъ: "", ы: "y",
-  і: "i", ь: "", э: "e", ю: "yu", я: "ya",
-};
-const foldWord = (word: string) =>
-  Array.from(word)
-    .map(char => TRANSLIT[char] ?? char)
-    .join("")
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/kh/g, "h")
-    .replace(/q/g, "k")
-    .replace(/w/g, "v")
-    .replace(/x/g, "h") // Uzbek Latin: «Axmedova» = «Akhmedova»
-    .replace(/j/g, "zh")
-    .replace(/dzh/g, "zh")
-    .replace(/(yu|iu)/g, "u")
-    .replace(/(ya|ia)/g, "a")
-    .replace(/[yi]/g, "i")
-    .replace(/(.)\1+/g, "$1");
-// Initials («Nancy L Stitt») and stray letters are ignored when comparing.
-const latinWords = (value: string | null | undefined) =>
-  nameWords(value)
-    .map(foldWord)
-    .filter(word => word.length > 1);
-
-function levenshtein(a: string, b: string) {
-  if (a === b) return 0;
-  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    let previous = row[0];
-    row[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const current = row[j];
-      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
-      previous = current;
-    }
-  }
-  return row[b.length];
-}
-const wordsClose = (a: string, b: string) =>
-  a === b || (Math.min(a.length, b.length) >= 4 && levenshtein(a, b) <= Math.max(1, Math.floor(Math.min(a.length, b.length) / 5)));
-/** Two names are the same person if all words of the shorter one (≥ 2 words) have a close pair in the other. */
-export function similarNames(left: string, right: string) {
-  const a = latinWords(left);
-  const b = latinWords(right);
-  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-  if (short.length < 2) return false;
-  const used = new Set<number>();
-  return short.every(word => {
-    const index = long.findIndex((other, i) => !used.has(i) && wordsClose(word, other));
-    if (index < 0) return false;
-    used.add(index);
-    return true;
-  });
-}
 
 const digits = (value: unknown) => {
   const match = text(value).match(/\d+/);
