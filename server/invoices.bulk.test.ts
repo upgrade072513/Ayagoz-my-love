@@ -260,6 +260,12 @@ describe("invoices.exportExcel", () => {
         blankrows: true,
       })[3]?.[4]
     ).toBe("Плательщик 1");
+    // Every block sheet is numbered 1, 2, 3 … on its own.
+    for (const name of ["Блок А1", "Блок А2", "ХВ Астана"]) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, raw: true, blankrows: true });
+      const numbers = rows.slice(3).map(row => row?.[0]).filter(value => typeof value === "number");
+      expect(numbers).toEqual(numbers.map((_, index) => index + 1));
+    }
   });
 
   it("exports only accruals from the selected block folder", async () => {

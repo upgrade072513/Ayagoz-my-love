@@ -147,8 +147,10 @@ function makeAccrualSheet(title: string, headers: string[], rows: unknown[][]) {
   );
   // ISO date strings → real Excel dates (shown as dd.mm.yyyy, sortable and filterable as dates).
   const DATE_COLS = [2, 3, 10, 11];
-  rows = rows.map(row =>
+  rows = rows.map((row, rowIndex) =>
     row.map((value, index) => {
+      // «№» is numbered within each sheet (1, 2, 3 … on every block sheet), not copied from the main list.
+      if (index === 0) return rowIndex + 1;
       const match = DATE_COLS.includes(index) && typeof value === "string" ? value.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
       // Excel serial day number (no time zone drift); the dd.mm.yyyy format is applied below.
       return match
