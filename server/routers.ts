@@ -118,7 +118,6 @@ import {
 } from "./security/rateLimit";
 import { readAllSheetMatrices, readFirstSheetMatrix } from "./security/spreadsheet";
 import { extractEmailRows, planEmailUpdate } from "./emailImport";
-import { contractKey } from "@shared/nameMatch";
 import {
   establishSession,
   generateTemporaryPassword,
@@ -1837,95 +1836,6 @@ export const appRouter = router({
         return parseContractsExcel(upload.buffer, input.mapping as any, {
           fileName: input.fileName,
         });
-      }),
-    /**
-     * Adds a common suffix («/08-23») to contract numbers that have only «номер-год» («374-2026»).
-     * dryRun returns the plan; numbers that already have a suffix, letters or nothing are left alone.
-     */
-    appendNumberSuffix: protectedProcedure
-      .input(
-        z.object({
-          suffix: z.string().trim().min(1).max(20).regex(/^[-/][0-9A-Za-zА-Яа-я/\-]+$/, "Суффикс должен начинаться с «-» или «/», например /08-23"),
-          dryRun: z.boolean().default(true),
-          ids: z.array(idSchema).max(LIMITS.bulkIds).optional(),
-        })
-      )
-      .mutation(async ({ input, ctx }) => {
-        assertPermission(
-          ctx.user.role,
-          "manageContracts",
-          "Недостаточно прав для изменения договоров"
-        );
-        const all = await listContracts(true);
-        const visible = ctx.user.role === "admin" ? all : all.filter(row => canManageContract(ctx.user, row));
-        // «0502-2026/08-23» and «502-2026/08-23» are the same number.
-        const taken = new Set(all.map(row => contractKey(row.contractNumber)).filter(Boolean) as string[]);
-        const wanted = input.ids ? new Set(input.ids) : null;
-        const plan: Array<{ id: number; tenantName: string; oldNumber: string; newNumber: string; conflict?: string }> = [];
-        for (const contract of visible) {
-          if (wanted && !wanted.has(contract.id)) continue;
-          const current = contract.contractNumber?.trim() ?? "";
-          const match = current.match(/^№?\s*(\d{1,6})\s*-\s*(\d{4})$/);
-          if (!match) continue;
-          const newNumber = `${match[1]}-${match[2]}${input.suffix}`;
-          const conflict = taken.has(contractKey(newNumber) ?? "")
-            ? `Номер «${newNumber}» уже есть у другого договора`
-            : undefined;
-          plan.push({ id: contract.id, tenantName: contract.tenantName, oldNumber: current, newNumber, conflict });
-        }
-        if (input.dryRun) return { plan, updated: 0 };
-        let updated = 0;
-        for (const item of plan) {
-          if (item.conflict) continue;
-          const contract = await requireContractById(ctx.user, item.id);
-          await updateContract(contract.id, { contractNumber: item.newNumber });
-          taken.add(contractKey(item.newNumber) ?? item.newNumber);
-          await recordContractAudit({
-            contractId: contract.id,
-            actorUserId: ctx.user.id,
-            action: "updated",
-            details: `Номер договора: «${item.oldNumber}» → «${item.newNumber}»`,
-          });
-          updated++;
-        }
-        return { plan, updated };
-      }),
-    /** Undo «Дополнить номера»: every number still equal to what the action wrote goes back to the old one. */
-    undoNumberSuffix: protectedProcedure
-      .input(z.object({ dryRun: z.boolean().default(true) }))
-      .mutation(async ({ input, ctx }) => {
-        assertPermission(
-          ctx.user.role,
-          "manageContracts",
-          "Недостаточно прав для изменения договоров"
-        );
-        const audits = await dbHelpers.listNumberSuffixAudits();
-        const seen = new Set<number>();
-        const plan: Array<{ id: number; tenantName: string; oldNumber: string; newNumber: string }> = [];
-        for (const audit of audits) {
-          if (seen.has(audit.contractId)) continue; // newest change per contract
-          seen.add(audit.contractId);
-          const match = String(audit.details ?? "").match(/^Номер договора: «(.+)» → «(.+)»$/);
-          if (!match) continue;
-          const contract = await getContract(audit.contractId);
-          if (!contract || (ctx.user.role !== "admin" && !canManageContract(ctx.user, contract))) continue;
-          // Changed by hand afterwards? Leave it.
-          if (contract.contractNumber?.trim() !== match[2]) continue;
-          plan.push({ id: contract.id, tenantName: contract.tenantName, oldNumber: match[2], newNumber: match[1] });
-        }
-        if (input.dryRun) return { plan, updated: 0 };
-        let updated = 0;
-        for (const item of plan) {
-          await updateContract(item.id, { contractNumber: item.newNumber });
-          await recordContractAudit({
-            contractId: item.id,
-            actorUserId: ctx.user.id,
-            action: "updated",
-            details: `Отмена дополнения номера: «${item.oldNumber}» → «${item.newNumber}»`,
-          });
-          updated++;
-        }
-        return { plan, updated };
       }),
     /** Writes the building («Блок 38/39/44/45») into the address of selected contracts; the folder stays. */
     setBuilding: protectedProcedure
