@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { contractInput } from "./routers";
 
+// Always in the future: an «active» contract may not have ended already.
+const nextYear = new Date().getUTCFullYear() + 1;
 const base = {
   tenantName: "ТОО Альфа",
   propertyName: "Объект 1",
-  startDate: "2026-09-01",
-  endDate: "2026-09-30",
+  startDate: `${nextYear}-09-01`,
+  endDate: `${nextYear}-09-30`,
   tariffType: "monthly" as const,
   tariffAmount: 100000,
   status: "active" as const,
