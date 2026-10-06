@@ -1575,7 +1575,9 @@ export const appRouter = router({
         z.object({
           fileName: fileNameSchema,
           mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-          dataUrl: dataUrlSchema(LIMITS.scanBytes),
+          // Omitted when the scan is not kept (only the recognised data is saved — saves storage).
+          dataUrl: dataUrlSchema(LIMITS.scanBytes).optional(),
+          attachScan: z.boolean().default(true),
           fields: contractInput,
           duplicateMode: z.enum(["new", "overwrite", "merge"]).default("new"),
           duplicateContractId: idSchema.optional(),
@@ -1588,9 +1590,39 @@ export const appRouter = router({
           "Недостаточно прав для создания договора"
         );
         await enforce(RULES.fileUpload, rateKey("user", ctx.user.id));
+        if (input.attachScan && !input.dataUrl)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Нет файла скана для сохранения" });
         // Validated once, before anything is written: real type from magic bytes, bounded size.
-        const upload = decodeScanUpload(input.dataUrl, input.mimeType);
+        const upload =
+          input.attachScan && input.dataUrl
+            ? decodeScanUpload(input.dataUrl, input.mimeType)
+            : null;
         const displayName = cleanDisplayFileName(input.fileName);
+        /** Stores the encrypted scan and links it to the contract (skipped when «без скана»). */
+        const storeScan = async (contractId: number) => {
+          if (!upload) return;
+          const encrypted = encryptContractFile(upload.buffer);
+          const { key, url } = await storagePut(
+            String(ctx.user.id) +
+              "/contracts/scans/" +
+              Date.now() +
+              "-" +
+              storageSafeName(displayName) +
+              ".enc",
+            encrypted.data,
+            "application/octet-stream"
+          );
+          await createDocument({
+            contractId,
+            fileName: displayName,
+            mimeType: upload.mimeType as "application/pdf",
+            fileKey: key,
+            fileUrl: url,
+            encryptionVersion: encrypted.version,
+            encryptionIv: encrypted.iv,
+            encryptionAuthTag: encrypted.authTag,
+          });
+        };
         const target = input.duplicateContractId
           ? await getContract(input.duplicateContractId)
           : null;
@@ -1705,36 +1737,15 @@ export const appRouter = router({
           });
           if (!updated) throw new Error("Не удалось обновить договор");
           await recalculateDraftAccrualsForContract(updated);
-          const safeName = storageSafeName(displayName);
-          const encrypted = encryptContractFile(upload.buffer);
-          const { key, url } = await storagePut(
-            String(ctx.user.id) +
-              "/contracts/scans/" +
-              Date.now() +
-              "-" +
-              safeName +
-              ".enc",
-            encrypted.data,
-            "application/octet-stream"
-          );
-          await createDocument({
-            contractId: updated.id,
-            fileName: displayName,
-            mimeType: upload.mimeType as "application/pdf",
-            fileKey: key,
-            fileUrl: url,
-            encryptionVersion: encrypted.version,
-            encryptionIv: encrypted.iv,
-            encryptionAuthTag: encrypted.authTag,
-          });
+          await storeScan(updated.id);
           await recordContractAudit({
             contractId: updated.id,
             actorUserId: ctx.user.id,
             action: input.duplicateMode === "merge" ? "updated" : "updated",
             details:
               input.duplicateMode === "merge"
-                ? "Объединение данных из скана"
-                : "Перезапись договора из скана",
+                ? `Объединение данных из скана${upload ? "" : " (скан не сохранён)"}`
+                : `Перезапись договора из скана${upload ? "" : " (скан не сохранён)"}`,
           });
           return updated;
         }
@@ -1745,18 +1756,6 @@ export const appRouter = router({
           input.fields.blockFolder
         );
         requireBlockAccess(ctx.user, blockFolder);
-        const safeName = storageSafeName(displayName);
-        const encrypted = encryptContractFile(upload.buffer);
-        const { key, url } = await storagePut(
-          String(ctx.user.id) +
-            "/contracts/scans/" +
-            Date.now() +
-            "-" +
-            safeName +
-            ".enc",
-          encrypted.data,
-          "application/octet-stream"
-        );
         const contract = await createContract({
           ...input.fields,
           contractDate: input.fields.contractDate
@@ -1780,21 +1779,12 @@ export const appRouter = router({
         });
         if (!contract)
           throw new Error("Не удалось сохранить договор после загрузки скана");
-        await createDocument({
-          contractId: contract.id,
-          fileName: displayName,
-          mimeType: upload.mimeType as "application/pdf",
-          fileKey: key,
-          fileUrl: url,
-          encryptionVersion: encrypted.version,
-          encryptionIv: encrypted.iv,
-          encryptionAuthTag: encrypted.authTag,
-        });
+        await storeScan(contract.id);
         await recordContractAudit({
           contractId: contract.id,
           actorUserId: ctx.user.id,
           action: "created",
-          details: "Создание договора из скана",
+          details: upload ? "Создание договора из скана" : "Создание договора из скана (скан не сохранён)",
         });
         return contract;
       }),

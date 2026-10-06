@@ -219,6 +219,36 @@ describe("contracts scan OCR", () => {
     ).rejects.toThrow();
   });
 
+  it("can save only the recognised data, without uploading the scan", async () => {
+    mocks.storagePut.mockClear();
+    mocks.createDocument.mockClear();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.contracts.createFromScan({
+      fileName: "договор 102.png",
+      mimeType: "image/png",
+      attachScan: false, // no dataUrl at all: the file never leaves the browser
+      fields: {
+        tenantName: "ТОО Бета",
+        propertyName: "Объект OCR",
+        startDate: "2026-07-10",
+        endDate: "2026-07-12",
+        tariffType: "daily",
+        tariffAmount: 5000,
+        status: "ended",
+      },
+    });
+    expect(result).toMatchObject({ id: 42, tenantName: "ТОО Бета" });
+    expect(mocks.storagePut).not.toHaveBeenCalled();
+    expect(mocks.createDocument).not.toHaveBeenCalled();
+    await expect(
+      caller.contracts.createFromScan({
+        fileName: "x.png",
+        mimeType: "image/png",
+        fields: { tenantName: "X", propertyName: "Y", startDate: "2026-07-10", endDate: "2026-07-12", tariffType: "daily", tariffAmount: 1, status: "ended" },
+      })
+    ).rejects.toThrow(/Нет файла скана/);
+  });
+
   it("saves a confirmed OCR result and attaches the original scan", async () => {
     const caller = appRouter.createCaller(ctx);
     const result = await caller.contracts.createFromScan({
