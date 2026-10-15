@@ -24,6 +24,7 @@ export const CONTENT_SECURITY_POLICY = [
   "connect-src 'self' https://www.googleapis.com https://gmail.googleapis.com https://content.googleapis.com https://accounts.google.com https://oauth2.googleapis.com",
   "frame-src 'self' blob: data: https://accounts.google.com https://docs.google.com https://drive.google.com https://content.googleapis.com",
   "worker-src 'self' blob:",
+  "manifest-src 'self'",
   "media-src 'self' blob: data:",
   "object-src 'none'",
   "base-uri 'self'",

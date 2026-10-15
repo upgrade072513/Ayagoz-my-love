@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { initPwa } from "./lib/pwa";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
@@ -37,6 +38,8 @@ const trpcClient = trpc.createClient({
     }),
   ],
 });
+
+initPwa();
 
 createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>

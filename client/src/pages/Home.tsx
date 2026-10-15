@@ -13,6 +13,7 @@ import { ContractFolderManager } from "@/components/ContractFolderManager";
 import { FloatingScrollbar } from "@/components/FloatingScrollbar";
 import { EmailImportButton } from "@/components/EmailImport";
 import { AccrualSummary } from "@/components/AccrualSummary";
+import { InstallAppButton } from "@/components/InstallAppButton";
 import { documentFileUrl, useDocumentFile } from "@/lib/documentFile";
 import { KEEP_SCANS_KEY, usePersistentFlag } from "@/lib/prefs";
 import { Input } from "@/components/ui/input";
@@ -411,6 +412,7 @@ export default function Home() {
       <nav aria-label="Разделы" className="flex flex-col gap-0.5">{nav.map(renderNavRow)}</nav>
       {manageNav.length > 0 && <><p className="sidebar-caption">Управление</p><nav aria-label="Управление" className="flex flex-col gap-0.5">{manageNav.map(renderNavRow)}</nav></>}
       <div className="mt-auto flex flex-col gap-2 px-1 pt-6">
+        <InstallAppButton collapsed={sidebarCollapsed} />
         <div className="ios-segment sb-full-only" role="group" aria-label="Тема оформления"><button type="button" aria-pressed={theme === "light"} onClick={() => setTheme("light")}><Sun className="h-3.5 w-3.5" />Светлая</button><button type="button" aria-pressed={theme === "dark"} onClick={() => setTheme("dark")}><Moon className="h-3.5 w-3.5" />Тёмная</button></div>
         <button type="button" className="sidebar-row sb-rail-only" title={theme === "dark" ? "Светлая тема" : "Тёмная тема"} aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><span className="ios-tile" style={{ background: "var(--app-fill)", color: "var(--app-fg)" }}>{theme === "dark" ? <Sun /> : <Moon />}</span></button>
         <button type="button" onClick={logout} className="sidebar-row" title="Выйти из системы" style={{ color: "var(--app-danger)" }}><span className="flex w-7 shrink-0 justify-center"><LogOut className="h-[18px] w-[18px]" /></span><span className="sb-label">Выйти из системы</span></button>
