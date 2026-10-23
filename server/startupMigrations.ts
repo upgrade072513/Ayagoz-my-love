@@ -3,6 +3,11 @@
 // run (service settings, manual restarts), the app still brings its own schema up to date.
 // Every step is idempotent and failures are logged, never fatal.
 import mysql from "mysql2/promise";
+import { drizzle } from "drizzle-orm/mysql2";
+import { migrate } from "drizzle-orm/mysql2/migrator";
+import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 type Conn = mysql.Connection;
 
@@ -41,6 +46,28 @@ export async function runStartupMigrations(url = process.env.DATABASE_URL) {
   }
   const c = conn;
   try {
+    const [[{ db }]]: any = await c.query("SELECT DATABASE() AS db");
+    if (!db || /^(sys|mysql|information_schema|performance_schema|metrics_schema)$/i.test(db)) {
+      console.error(
+        `[startup-migrations] DATABASE_URL points to the system database "${db ?? ""}". ` +
+          "Put your own database name after the port, e.g. ...:4000/test?ssl=... — nothing was changed."
+      );
+      return;
+    }
+    let createdSchema = false;
+    await step("initial schema", async () => {
+      const [rows]: any = await c.query(
+        "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' LIMIT 1"
+      );
+      if (rows.length) return;
+      const folder = path.resolve(process.cwd(), "drizzle");
+      if (!fs.existsSync(path.join(folder, "meta", "_journal.json")))
+        throw new Error(`migrations folder not found: ${folder}`);
+      console.log(`[startup-migrations] database ${db} is empty, creating the schema…`);
+      await migrate(drizzle(c), { migrationsFolder: folder });
+      createdSchema = true;
+      console.log("[startup-migrations] schema created");
+    });
     await step("rateLimits table", async () => {
       await c.query(
         "CREATE TABLE IF NOT EXISTS `rateLimits` (`key` varchar(128) NOT NULL, `count` int NOT NULL DEFAULT 0, `resetAtMs` bigint NOT NULL, CONSTRAINT `rateLimits_key` PRIMARY KEY(`key`))"
@@ -120,6 +147,16 @@ export async function runStartupMigrations(url = process.env.DATABASE_URL) {
       );
     });
     console.log("[startup-migrations] schema is up to date");
+    const script = path.resolve(process.cwd(), "scripts", "ensure-admin.mjs");
+    if (createdSchema && process.env.ADMIN_EMAIL && fs.existsSync(script))
+      await new Promise<void>(resolve =>
+        execFile(process.execPath, [script], { env: process.env }, (error, stdout, stderr) => {
+          if (stdout) process.stdout.write(stdout);
+          if (stderr) process.stderr.write(stderr);
+          if (error) console.error("[startup-migrations] ensure-admin failed:", error.message);
+          resolve();
+        })
+      );
   } finally {
     await c.end().catch(() => undefined);
   }
