@@ -4,6 +4,9 @@
 // Safe to run on every deploy: each step checks the current schema first.
 import "dotenv/config";
 import mysql from "mysql2/promise";
+import { drizzle } from "drizzle-orm/mysql2";
+import { migrate } from "drizzle-orm/mysql2/migrator";
+import { fileURLToPath } from "node:url";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -30,6 +33,15 @@ try {
   };
 
   let existing = await columns();
+  if (!existing.size) {
+    // Empty (new) database: create the whole schema from the drizzle migrations first.
+    console.log(`[migrate-auth] database ${db} is empty, creating the schema…`);
+    await migrate(drizzle(connection), {
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+    });
+    existing = await columns();
+    console.log("[migrate-auth] schema created");
+  }
   if (!existing.size) throw new Error(`Table users not found in database ${db}`);
 
   if (!existing.has("mustChangePassword")) {
